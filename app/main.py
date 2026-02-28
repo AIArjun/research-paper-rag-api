@@ -53,9 +53,10 @@ rag = RAGEngine()
 app = FastAPI(
     title="Research Paper RAG API",
     description=(
-        "Upload research papers (PDF) and ask questions with cited answers. "
-        "Uses LangChain for orchestration, ChromaDB for vector storage, "
-        "and OpenAI/Ollama for LLM inference. Supports multi-paper knowledge bases."
+        "Production-oriented RAG API with modular architecture, containerization, "
+        "CI/CD, and structured observability. Upload research papers (PDF) and ask "
+        "questions with page-level cited answers. Uses LangChain for orchestration, "
+        "ChromaDB for vector storage, and OpenAI/Ollama for LLM inference."
     ),
     version="1.0.0",
     contact={
