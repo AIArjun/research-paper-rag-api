@@ -48,8 +48,8 @@ class RAGEngine:
     def _initialize(self):
         """Initialize embedding model and vector store."""
         try:
-            from langchain_community.embeddings import HuggingFaceEmbeddings
-            from langchain_community.vectorstores import Chroma
+            from langchain_huggingface import HuggingFaceEmbeddings
+            from langchain_chroma import Chroma
 
             logger.info(f"Initializing embeddings: {settings.EMBEDDING_MODEL}")
             self._embeddings = HuggingFaceEmbeddings(
@@ -107,7 +107,7 @@ class RAGEngine:
                     if text.strip():
                         pages.append({"page": i + 1, "text": text.strip()})
             return pages
-        except ImportError:
+        except Exception:
             # Fallback to pypdf
             from pypdf import PdfReader
 
@@ -171,7 +171,11 @@ class RAGEngine:
             raise ValueError("Could not extract text from PDF. Is it scanned/image-based?")
 
         # Chunk
-        chunks = self._chunk_text(pages)
+        chunks = self._chunk_text(
+            pages,
+            chunk_size=settings.CHUNK_SIZE,
+            chunk_overlap=settings.CHUNK_OVERLAP,
+        )
 
         # Store metadata
         self.papers[paper_id] = {
