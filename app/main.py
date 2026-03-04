@@ -72,7 +72,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -133,10 +133,6 @@ class PaperInfo(BaseModel):
     pages: int
     chunks: int
     uploaded_at: str
-
-
-# ─── Track uptime ───
-_start_time = time.time()
 
 
 # ─── Endpoints ───

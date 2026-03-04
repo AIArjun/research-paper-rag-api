@@ -19,12 +19,6 @@ client = TestClient(app)
 # ─── Helper ───
 def _create_minimal_pdf() -> bytes:
     """Create a minimal valid PDF for testing."""
-    from pypdf import PdfWriter
-
-    writer = PdfWriter()
-    writer.add_blank_page(width=612, height=792)
-
-    # Add text via annotation workaround — use reportlab if available
     buf = io.BytesIO()
     try:
         from reportlab.pdfgen import canvas
@@ -44,6 +38,10 @@ def _create_minimal_pdf() -> bytes:
         c.save()
         return buf.getvalue()
     except ImportError:
+        from pypdf import PdfWriter
+
+        writer = PdfWriter()
+        writer.add_blank_page(width=612, height=792)
         writer.write(buf)
         return buf.getvalue()
 
