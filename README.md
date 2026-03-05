@@ -2,6 +2,8 @@
 
 A production-oriented **Retrieval-Augmented Generation (RAG)** API with modular architecture, containerization, CI/CD, and structured observability. Upload research papers (PDF) and ask questions with **cited answers**.
 
+**Live Demo:** [https://research-paper-rag-api.onrender.com](https://research-paper-rag-api.onrender.com) | [API Docs](https://research-paper-rag-api.onrender.com/docs)
+
 Built with **LangChain + FastAPI + ChromaDB + OpenAI/Ollama + Docker**.
 
 ---
