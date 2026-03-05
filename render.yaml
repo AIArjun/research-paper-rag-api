@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: research-paper-rag-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: LLM_PROVIDER
+        value: demo
+      - key: EMBEDDING_MODEL
+        value: all-MiniLM-L6-v2
+      - key: LOG_LEVEL
+        value: INFO
+      - key: OPENAI_API_KEY
+        sync: false

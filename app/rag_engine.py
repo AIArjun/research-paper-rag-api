@@ -186,20 +186,26 @@ class RAGEngine:
             "uploaded_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Add to vector store
+        # Add to vector store (batch to limit memory on free-tier hosts)
         if self._vectorstore and self._embeddings:
-            texts = [c["text"] for c in chunks]
-            metadatas = [
-                {
-                    "paper_id": paper_id,
-                    "filename": filename,
-                    "page": c["page"],
-                }
-                for c in chunks
-            ]
-            ids = [f"{paper_id}-{i}" for i in range(len(chunks))]
-            self._vectorstore.add_texts(texts=texts, metadatas=metadatas, ids=ids)
-            logger.info(f"Added {len(chunks)} chunks to vector store for '{filename}'")
+            BATCH_SIZE = 20
+            total = len(chunks)
+            for batch_start in range(0, total, BATCH_SIZE):
+                batch_end = min(batch_start + BATCH_SIZE, total)
+                batch = chunks[batch_start:batch_end]
+                texts = [c["text"] for c in batch]
+                metadatas = [
+                    {
+                        "paper_id": paper_id,
+                        "filename": filename,
+                        "page": c["page"],
+                    }
+                    for c in batch
+                ]
+                ids = [f"{paper_id}-{i}" for i in range(batch_start, batch_end)]
+                self._vectorstore.add_texts(texts=texts, metadatas=metadatas, ids=ids)
+                logger.info(f"Indexed batch {batch_start}-{batch_end} of {total} chunks")
+            logger.info(f"Added {total} chunks to vector store for '{filename}'")
         else:
             # Demo mode: store chunks in memory
             for i, c in enumerate(chunks):
