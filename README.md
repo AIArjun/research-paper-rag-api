@@ -1,10 +1,22 @@
 # 📚 Research Paper RAG API
 
-A production-oriented **Retrieval-Augmented Generation (RAG)** API with modular architecture, containerization, CI/CD, and structured observability. Upload research papers (PDF) and ask questions with **cited answers**.
+A research **Retrieval-Augmented Generation (RAG)** API prototype. Upload research papers (PDF) and ask questions with source passages and page references. Real-model answers require a separately configured and verified backend.
 
 **Live Demo:** [https://research-paper-rag-api.onrender.com](https://research-paper-rag-api.onrender.com) | [API Docs](https://research-paper-rag-api.onrender.com/docs)
 
 Built with **LangChain + FastAPI + ChromaDB + OpenAI/Ollama + Docker**.
+
+**Deployment status:** the current Dockerfile installs the lightweight demo dependencies. The hosted demo uses keyword retrieval and template answers; adding a provider key does not install the missing real-RAG libraries. Authentication, spending limits, truthful real-mode readiness and durable metadata are still required before exposing paid inference. The current `/health` provider field is configuration, not proof of a successful model call.
+
+## Foundation behavior
+
+- Chunk size and overlap come from configuration; invalid values are rejected and every chunk advances within its original physical PDF page.
+- Paper IDs are full-document SHA-256 digests. Uploading identical bytes again is idempotent and returns the original filename, ID and metadata. Different PDFs sharing the same header remain distinct. Clients must use returned IDs rather than assume the old 12-character format.
+- Metadata becomes visible only after successful indexing. Failed partial indexing triggers cleanup. When cleanup cannot be confirmed, querying is blocked until the affected deletion succeeds; the API reports an explicit storage failure.
+- A failed deletion is not reported as success. Retry the affected deletion to recover.
+- Generation receives complete retrieved passages; response previews remain short. Citations include stable paper/chunk IDs for newly indexed content. Retrieved passages still require manual claim-and-page verification.
+
+These protections are in-process. They do not make the in-memory registry crash-safe, fix persistent-vector/orphan recovery after restart, or provide authentication. Use a disposable local/test corpus for failure testing. Existing persistent corpora need a deliberate reindex/migration plan because document IDs have changed.
 
 ---
 
@@ -166,9 +178,12 @@ export LLM_PROVIDER=demo
 ## Running Tests
 
 ```bash
-pip install pytest httpx reportlab
+pip install -r requirements-deploy.txt pytest httpx reportlab
+export LLM_PROVIDER=demo
 pytest tests/ -v
 ```
+
+CI runs deterministic demo/fake-backend tests on Python 3.11, matching Docker, and builds/smoke-tests the demo image. These checks do not establish real-provider compatibility or end-to-end model accuracy.
 
 ---
 
@@ -197,7 +212,7 @@ Client
 
 ## Evaluation
 
-Benchmarked on 5 ML/CV research papers (8–25 pages each) using the demo and OpenAI pipelines:
+Legacy figures below were previously recorded for 5 ML/CV research papers (8–25 pages each). **They are unverified:** this repository does not include the corpus, labeled questions, outputs or evaluation runner needed to reproduce them. Do not use these figures as evidence of the current deployment's accuracy or latency.
 
 | Metric | Demo Mode | OpenAI (GPT-4o-mini) |
 |--------|-----------|---------------------|
