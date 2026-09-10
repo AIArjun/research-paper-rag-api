@@ -38,7 +38,8 @@ jobs:
       - name: Smoke-test Docker demo startup
         run: |
           docker run -d --name rag-foundation-ci -p 18001:8001 -e LLM_PROVIDER=demo rag-foundation-ci
-          curl --fail --retry 15 --retry-connrefused --retry-delay 1 http://localhost:18001/health
+          curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-connrefused --retry-delay 1 --max-time 5 --retry-max-time 60 http://localhost:18001/health --output /tmp/rag-health.json
+          python -c 'import json; data = json.load(open("/tmp/rag-health.json")); assert data["status"] == "healthy" and data["llm_provider"] == "demo" and data["papers_loaded"] == 0; print(data)'
 
       - name: Container logs
         if: failure()
