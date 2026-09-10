@@ -19,11 +19,11 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from app.rag_engine import RAGEngine, StorageMutationError
+from app.rag_engine import RAGEngine, StorageMutationError, BackendUnavailableError, GenerationError
 from app.config import settings
 
 # ─── Logging ───
@@ -85,9 +85,28 @@ class HealthResponse(BaseModel):
     papers_loaded: int = 0
     total_chunks: int = 0
     llm_provider: str = ""
+    ready: bool = False
+    configured_provider: str = ""
+    configured_model: str = ""
+    effective_retrieval: str = "unavailable"
+    effective_generation: str = "unavailable"
+    init_error: Optional[str] = None
+    pending_cleanup_ids: list[str] = Field(default_factory=list)
+    provider_connection_verified: bool = False
     timestamp: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
+
+
+class ReadinessResponse(BaseModel):
+    ready: bool
+    configured_provider: str
+    configured_model: str
+    effective_retrieval: str
+    effective_generation: str
+    init_error: Optional[str] = None
+    pending_cleanup_ids: list[str] = Field(default_factory=list)
+    provider_connection_verified: bool = False
 
 
 class UploadResponse(BaseModel):
@@ -131,10 +150,11 @@ class QueryResponse(BaseModel):
 
 class PaperInfo(BaseModel):
     paper_id: str
-    filename: str
-    pages: int
+    filename: Optional[str] = None
+    pages: Optional[int] = None
     chunks: int
-    uploaded_at: str
+    uploaded_at: Optional[str] = None
+    status: str = "ready"
 
 
 # ─── Endpoints ───
@@ -191,13 +211,24 @@ async def root():
 
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health_check():
-    """Check API health and knowledge base status."""
+    """Report local component readiness; this does not call the provider."""
     stats = rag.get_stats()
-    return HealthResponse(
+    readiness = rag.get_readiness()
+    response = HealthResponse(
+        status="healthy" if readiness["ready"] else "unready",
         papers_loaded=stats["papers_loaded"],
         total_chunks=stats["total_chunks"],
-        llm_provider=settings.LLM_PROVIDER,
+        llm_provider=readiness["effective_generation"],
+        **readiness,
     )
+    return JSONResponse(status_code=200 if readiness["ready"] else 503, content=response.model_dump())
+
+
+@app.get("/ready", response_model=ReadinessResponse, tags=["System"])
+async def readiness_check():
+    """Cheap local readiness, without indexing, embedding or inference calls."""
+    response = ReadinessResponse(**rag.get_readiness())
+    return JSONResponse(status_code=200 if response.ready else 503, content=response.model_dump())
 
 
 @app.post("/papers/upload", response_model=UploadResponse, tags=["Papers"])
@@ -213,6 +244,20 @@ async def upload_paper(
     3. Embedded (converted to vectors)
     4. Stored (indexed in ChromaDB for retrieval)
     """
+    try:
+        rag.assert_storage_ready()
+        rag.assert_backend_ready()
+    except StorageMutationError as error:
+        raise HTTPException(status_code=503, detail={
+            "message": "Paper storage requires cleanup. Retry deletion of this ID before uploading.",
+            "paper_id": error.paper_id,
+            "cleanup_required": True,
+        })
+    except BackendUnavailableError as error:
+        raise HTTPException(status_code=503, detail={
+            "message": "The configured backend is not ready for uploads.",
+            "category": error.category,
+        })
     # Validate file type
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
@@ -238,6 +283,11 @@ async def upload_paper(
     try:
         result = rag.ingest_paper(contents, file.filename)
         elapsed = (time.time() - start) * 1000
+    except BackendUnavailableError as error:
+        raise HTTPException(status_code=503, detail={
+            "message": "The configured backend is not ready for uploads.",
+            "category": error.category,
+        })
     except StorageMutationError as error:
         logger.error("Paper ingestion requires storage recovery")
         raise HTTPException(status_code=503, detail={
@@ -283,6 +333,7 @@ async def query_papers(request: QueryRequest):
 
     try:
         rag.assert_storage_ready()
+        rag.assert_backend_ready()
         if rag.get_stats()["total_chunks"] == 0:
             raise HTTPException(
                 status_code=400,
@@ -295,6 +346,18 @@ async def query_papers(request: QueryRequest):
         )
     except HTTPException:
         raise
+    except BackendUnavailableError as error:
+        raise HTTPException(status_code=503, detail={
+            "message": "The configured backend is not ready for queries.",
+            "category": error.category,
+            "request_id": request_id,
+        })
+    except GenerationError:
+        logger.error(f"[{request_id}] Model generation failed")
+        raise HTTPException(status_code=502, detail={
+            "message": "The model could not generate an answer. Please retry later.",
+            "request_id": request_id,
+        })
     except StorageMutationError as error:
         logger.error(f"[{request_id}] Query blocked pending storage cleanup")
         raise HTTPException(status_code=503, detail={
@@ -339,7 +402,7 @@ async def query_papers(request: QueryRequest):
 @app.get("/papers", response_model=list[PaperInfo], tags=["Papers"])
 async def list_papers():
     """List all uploaded papers in the knowledge base."""
-    return rag.list_papers()
+    return rag.list_papers(include_pending=True)
 
 
 @app.delete("/papers/{paper_id}", tags=["Papers"])

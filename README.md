@@ -6,17 +6,25 @@ A research **Retrieval-Augmented Generation (RAG)** API prototype. Upload resear
 
 Built with **LangChain + FastAPI + ChromaDB + OpenAI/Ollama + Docker**.
 
-**Deployment status:** the current Dockerfile installs the lightweight demo dependencies. The hosted demo uses keyword retrieval and template answers; adding a provider key does not install the missing real-RAG libraries. Authentication, spending limits, truthful real-mode readiness and durable metadata are still required before exposing paid inference. The current `/health` provider field is configuration, not proof of a successful model call.
+**Deployment profile:** the Dockerfile installs the lightweight demo dependencies. Demo mode uses keyword retrieval and template answers; adding a provider key does not install the missing real-RAG libraries. Requested real mode reports unavailable when its dependencies or configuration are missing. Authentication, spending limits, compatible real dependencies and durable metadata are still required before exposing paid inference. The public deployment may lag this branch; verify its deployed commit before relying on new behavior.
 
 ## Foundation behavior
 
 - Chunk size and overlap come from configuration; invalid values are rejected and every chunk advances within its original physical PDF page.
 - Paper IDs are full-document SHA-256 digests. Uploading identical bytes again is idempotent and returns the original filename, ID and metadata. Different PDFs sharing the same header remain distinct. Clients must use returned IDs rather than assume the old 12-character format.
-- Metadata becomes visible only after successful indexing. Failed partial indexing triggers cleanup. When cleanup cannot be confirmed, querying is blocked until the affected deletion succeeds; the API reports an explicit storage failure.
+- A paper is marked ready only after successful indexing. Failed partial indexing triggers cleanup. When cleanup cannot be confirmed, querying is blocked until the affected deletion succeeds; the API reports an explicit storage failure, and the paper list exposes a pending-cleanup status.
 - A failed deletion is not reported as success. Retry the affected deletion to recover.
 - Generation receives complete retrieved passages; response previews remain short. Citations include stable paper/chunk IDs for newly indexed content. Retrieved passages still require manual claim-and-page verification.
 
 These protections are in-process. They do not make the in-memory registry crash-safe, fix persistent-vector/orphan recovery after restart, or provide authentication. Use a disposable local/test corpus for failure testing. Existing persistent corpora need a deliberate reindex/migration plan because document IDs have changed.
+
+## Readiness and failures
+
+`GET /ready` reports configured provider/model, effective retrieval/generation components, initialization error category and pending-cleanup IDs. It returns 503 when local components are unavailable or storage cleanup is pending. `GET /health` now follows that local readiness status; its `llm_provider` field describes effective generation rather than echoing the requested provider. Neither endpoint makes provider, embedding or vector-search calls, and `provider_connection_verified=false` makes that limit explicit. A separate controlled query is required to establish provider connectivity and answer quality.
+
+Invalid provider/chunk configuration, missing keys or dependencies, and initialization failures are reported as unready. Real-mode queries cannot silently fall back to template answers: missing backends return 503, generation failures return a sanitized 502, and empty retrieval returns an explicit abstention marked `model_used=not-invoked`. A transient generation error does not rewrite local initialization status.
+
+`GET /papers` includes `status=ready` or `pending_cleanup`. Metadata unavailable for an incomplete record is null; active counts exclude pending records. Retrying deletion remains possible independently of model readiness. These states remain process-local until durable recovery is implemented.
 
 ---
 
@@ -147,6 +155,7 @@ curl -X POST http://localhost:8001/query \
 ### `GET /papers` — List uploaded papers
 ### `DELETE /papers/{paper_id}` — Remove a paper
 ### `GET /health` — System health check
+### `GET /ready` — Local component readiness (no paid calls)
 
 ---
 
