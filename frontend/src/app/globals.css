@@ -1537,3 +1537,15 @@ button, input, textarea, select {
     gap: 10px 20px;
   }
 }
+
+.observatory__banner {
+  width: 100%;
+  max-width: 1560px;
+  margin: 0 auto;
+  padding: 12px clamp(16px, 3vw, 32px) 0;
+}
+.answer__body code.math {
+  font-family: var(--font-mono-stack);
+  font-style: normal;
+  background: rgba(79, 184, 166, 0.12);
+}

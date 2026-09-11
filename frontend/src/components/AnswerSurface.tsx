@@ -38,7 +38,7 @@ export function AnswerSurface({ pending, elapsedSeconds, result, error, modelNam
               {modelName ? ` and generating with ${modelName}` : " and generating"}
             </p>
             <p className="answer__pending-question">“{pending.question}”</p>
-            <p className="answer__pending-meta">{elapsedSeconds} s elapsed · one model call · no automatic retry</p>
+            <p className="answer__pending-meta">{elapsedSeconds} s elapsed · up to one model call · no automatic retry</p>
           </div>
         </div>
       </section>

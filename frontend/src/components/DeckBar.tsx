@@ -1,3 +1,4 @@
+import { summarizeBudget } from "@/lib/client/budget";
 import type { ObservatoryStatus } from "@/lib/shared/types";
 
 interface Props {
@@ -13,22 +14,11 @@ function describe(status: ObservatoryStatus | null, known: boolean): { tone: "ok
   if (!status.ready) {
     return { tone: "off", text: `Backend not ready${status.init_error ? ` · ${status.init_error}` : ""}`, detail: "Uploads and questions will be refused until it is ready." };
   }
-  const usage = status.usage;
-  const calls = usage?.calls_today ?? null;
-  const allowance = usage?.daily_call_allowance ?? null;
-  const budget = status.budget_state === "exhausted" ? "allowance used up" : calls !== null && allowance !== null ? `${calls} of ${allowance} calls used today` : null;
+  const budget = summarizeBudget(status);
   const model = status.configured_model || status.effective_generation;
-  const tone = status.budget_state === "exhausted" ? "warn" : "ok";
-  const text = [model, budget].filter(Boolean).join(" · ");
-  const detail = [
-    `Retrieval: ${status.effective_retrieval}. Generation: ${status.effective_generation}.`,
-    usage?.tokens_charged_total !== null && usage?.tokens_charged_total !== undefined
-      ? `Tokens charged so far: ${usage.tokens_charged_total.toLocaleString()} of ${usage.total_token_allowance?.toLocaleString() ?? "?"}.`
-      : "",
-    "Figures come from the backend ledger, not from this page.",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const tone = budget.exhausted || (status.budget_state !== null && status.budget_state !== "ok") ? "warn" : "ok";
+  const text = [model, budget.short].filter(Boolean).join(" · ");
+  const detail = `Retrieval: ${status.effective_retrieval}. Generation: ${status.effective_generation}. ${budget.detail}`;
   return { tone, text: text || "Backend ready", detail };
 }
 

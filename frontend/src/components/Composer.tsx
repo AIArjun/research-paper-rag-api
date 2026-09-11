@@ -121,7 +121,7 @@ export function Composer({ papers, selectedPaperId, busy, querying, corpusEmpty,
           </button>
         </div>
       </div>
-      <p className="composer__note">One model call per question. Nothing is sent until you press Ask (Ctrl/⌘ + Enter).</p>
+      <p className="composer__note">Up to one model call per question; nothing is sent until you press Ask (Ctrl/⌘ + Enter).</p>
     </form>
   );
 }

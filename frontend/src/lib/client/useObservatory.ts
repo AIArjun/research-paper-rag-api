@@ -131,7 +131,7 @@ export interface ObservatoryActions {
   selectCitation(index: number | null): void;
   dismissUpload(): void;
   dismissQuery(): void;
-  logout(): Promise<void>;
+  logout(): Promise<ApiError | null>;
 }
 
 export interface Observatory {
@@ -157,6 +157,10 @@ export function useObservatory(onLoggedOut: () => void): Observatory {
   const localRef = useRef<Map<string, LocalFile>>(new Map());
   const stateRef = useRef(state);
   stateRef.current = state;
+  // Kept in a ref so an unstable callback identity can never re-trigger the load effect.
+  const loggedOutRef = useRef(onLoggedOut);
+  loggedOutRef.current = onLoggedOut;
+  const signalLoggedOut = useCallback(() => loggedOutRef.current(), []);
 
   const setPending = (pending: Pending) => {
     pendingRef.current = pending;
@@ -168,10 +172,10 @@ export function useObservatory(onLoggedOut: () => void): Observatory {
       dispatch({ type: "status/loaded", status });
     } catch (failure) {
       const error = toApiError(failure);
-      if (error.category === "unauthenticated") onLoggedOut();
+      if (error.category === "unauthenticated") signalLoggedOut();
       dispatch({ type: "status/loaded", status: null });
     }
-  }, [onLoggedOut]);
+  }, [signalLoggedOut]);
 
   const refreshPapers = useCallback(async () => {
     dispatch({ type: "papers/loading" });
@@ -180,10 +184,10 @@ export function useObservatory(onLoggedOut: () => void): Observatory {
       dispatch({ type: "papers/loaded", papers: response.papers });
     } catch (failure) {
       const error = toApiError(failure);
-      if (error.category === "unauthenticated") onLoggedOut();
+      if (error.category === "unauthenticated") signalLoggedOut();
       dispatch({ type: "papers/failed", error });
     }
-  }, [onLoggedOut]);
+  }, [signalLoggedOut]);
 
   // The library and the backend status load once when the workspace opens.
   // Neither touches the model; questions are sent only from `ask`.
@@ -250,11 +254,11 @@ export function useObservatory(onLoggedOut: () => void): Observatory {
       } catch (failure) {
         const error = toApiError(failure);
         setPending({ kind: "idle" });
-        if (error.category === "unauthenticated") onLoggedOut();
+        if (error.category === "unauthenticated") signalLoggedOut();
         dispatch({ type: "upload/failed", error });
       }
     },
-    [onLoggedOut, refreshPapers, refreshStatus, rememberLocal],
+    [signalLoggedOut, refreshPapers, refreshStatus, rememberLocal],
   );
 
   const upload = useCallback((file: File) => sendUpload(file, file.name), [sendUpload]);
@@ -300,12 +304,12 @@ export function useObservatory(onLoggedOut: () => void): Observatory {
       } catch (failure) {
         const error = toApiError(failure);
         setPending({ kind: "idle" });
-        if (error.category === "unauthenticated") onLoggedOut();
+        if (error.category === "unauthenticated") signalLoggedOut();
         dispatch({ type: "query/failed", error });
         if (error.category === "budget_exhausted" || error.category === "empty_corpus") void refreshStatus();
       }
     },
-    [onLoggedOut, refreshStatus],
+    [signalLoggedOut, refreshStatus],
   );
 
   const ask = useCallback(
@@ -323,15 +327,18 @@ export function useObservatory(onLoggedOut: () => void): Observatory {
   const dismissUpload = useCallback(() => dispatch({ type: "upload/dismiss" }), []);
   const dismissQuery = useCallback(() => dispatch({ type: "query/dismiss" }), []);
 
-  const logout = useCallback(async () => {
+  /** Resolves to null once the server has cleared the cookie; otherwise the error to show, and the session stays. */
+  const logout = useCallback(async (): Promise<ApiError | null> => {
     try {
       await callApi<void>("/api/auth/logout", { method: "POST" });
-    } finally {
-      for (const file of localRef.current.values()) URL.revokeObjectURL(file.url);
-      localRef.current.clear();
-      onLoggedOut();
+    } catch (failure) {
+      return toApiError(failure);
     }
-  }, [onLoggedOut]);
+    for (const file of localRef.current.values()) URL.revokeObjectURL(file.url);
+    localRef.current.clear();
+    signalLoggedOut();
+    return null;
+  }, [signalLoggedOut]);
 
   return {
     state,

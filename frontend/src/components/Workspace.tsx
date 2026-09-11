@@ -9,10 +9,13 @@ import { Composer } from "./Composer";
 import { DeckBar } from "./DeckBar";
 import { Evidence } from "./Evidence";
 import { Library } from "./Library";
+import { Notice } from "./Notice";
+import type { ApiError } from "@/lib/shared/types";
 
 export function Workspace() {
   const router = useRouter();
   const [leaving, setLeaving] = useState(false);
+  const [leaveError, setLeaveError] = useState<ApiError | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const libraryRef = useRef<HTMLElement>(null);
 
@@ -39,12 +42,31 @@ export function Workspace() {
 
   async function leave() {
     setLeaving(true);
-    await actions.logout();
+    setLeaveError(null);
+    const failure = await actions.logout();
+    if (failure) {
+      // The cookie is still set: say so and let the visitor try again.
+      setLeaveError(failure);
+      setLeaving(false);
+    }
   }
 
   return (
     <div className="observatory">
       <DeckBar status={state.status} statusKnown={state.statusChecked} onLogout={leave} logoutPending={leaving} />
+      {leaveError && (
+        <div className="observatory__banner">
+          <Notice
+            error={{ ...leaveError, category: leaveError.category, message: `The session could not be ended: ${leaveError.message} You are still signed in.` }}
+            onDismiss={() => setLeaveError(null)}
+            action={
+              <button type="button" className="button button--small" onClick={leave} disabled={leaving}>
+                Try leaving again
+              </button>
+            }
+          />
+        </div>
+      )}
 
       <div className="observatory__grid">
         <aside ref={libraryRef} className={`observatory__library${libraryOpen ? " observatory__library--open" : ""}`} aria-label="Paper library">

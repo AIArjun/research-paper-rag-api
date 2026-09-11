@@ -5,8 +5,8 @@ import type { Citation } from "@/lib/shared/types";
  * A deliberately small Markdown renderer that emits React elements only.
  * No HTML is ever parsed or injected, so model output cannot smuggle markup.
  * Supported: paragraphs, headings (demoted to h3/h4), bullet and numbered
- * lists, fenced code, inline code, bold, italic, and "(Source: X, Page N)"
- * references that match a returned citation.
+ * lists, fenced code, inline code, inline math spans, bold, italic, and
+ * "(Source: X, Page N)" references that match a returned citation.
  */
 
 export interface CitationRef {
@@ -38,7 +38,29 @@ export function findCitation(citations: readonly Citation[], paper: string, page
 
 type Inline = ReactNode;
 
+/**
+ * Inline math written as \( … \), \[ … \], $$ … $$ or $…$ (no space inside the
+ * dollars) is shown verbatim in a code-styled span, so identifiers such as d_k
+ * keep their underscores and are never mistaken for emphasis.
+ */
+const MATH_PATTERN = /\\\((.+?)\\\)|\\\[(.+?)\\\]|\$\$(.+?)\$\$|\$(?=\S)([^$\n]+?)(?<=\S)\$/g;
+
 function renderInline(text: string, citations: readonly Citation[], renderCitation: CitationRenderer, keyPrefix: string): Inline[] {
+  const out: Inline[] = [];
+  let cursor = 0;
+  let n = 0;
+  for (const match of text.matchAll(MATH_PATTERN)) {
+    const start = match.index ?? 0;
+    out.push(...renderCitations(text.slice(cursor, start), citations, renderCitation, `${keyPrefix}-m${n++}`));
+    const inner = (match[1] ?? match[2] ?? match[3] ?? match[4] ?? "").trim();
+    out.push(<code key={`${keyPrefix}-m${n++}`} className="math">{inner}</code>);
+    cursor = start + match[0].length;
+  }
+  out.push(...renderCitations(text.slice(cursor), citations, renderCitation, `${keyPrefix}-m${n++}`));
+  return out;
+}
+
+function renderCitations(text: string, citations: readonly Citation[], renderCitation: CitationRenderer, keyPrefix: string): Inline[] {
   const out: Inline[] = [];
   let cursor = 0;
   let n = 0;
@@ -58,21 +80,22 @@ function renderInline(text: string, citations: readonly Citation[], renderCitati
   return out;
 }
 
-const EMPHASIS_PATTERN = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
+/**
+ * Emphasis delimiters must hug non-space text; underscores only count at word
+ * boundaries, so snake_case identifiers stay literal.
+ */
+const EMPHASIS_PATTERN =
+  /(`[^`\n]+`|\*\*(?=\S)[^*\n]+?(?<=\S)\*\*|(?<![A-Za-z0-9_])__(?=\S)[^_\n]+?(?<=\S)__(?![A-Za-z0-9_])|\*(?=\S)[^*\n]+?(?<=\S)\*|(?<![A-Za-z0-9_])_(?=\S)[^_\n]+?(?<=\S)_(?![A-Za-z0-9_]))/g;
 
 function renderEmphasis(text: string, keyPrefix: string): Inline[] {
   const parts = text.split(EMPHASIS_PATTERN);
   return parts.map((part, i) => {
     const key = `${keyPrefix}-${i}`;
-    if (part.length === 0) return null;
-    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) return <code key={key}>{part.slice(1, -1)}</code>;
-    if ((part.startsWith("**") && part.endsWith("**")) || (part.startsWith("__") && part.endsWith("__"))) {
-      return part.length > 4 ? <strong key={key}>{part.slice(2, -2)}</strong> : part;
-    }
-    if ((part.startsWith("*") && part.endsWith("*")) || (part.startsWith("_") && part.endsWith("_"))) {
-      return part.length > 2 ? <em key={key}>{part.slice(1, -1)}</em> : part;
-    }
-    return <Fragment key={key}>{part}</Fragment>;
+    if (part === undefined || part.length === 0) return null;
+    if (i % 2 === 0) return <Fragment key={key}>{part}</Fragment>;
+    if (part.startsWith("`")) return <code key={key}>{part.slice(1, -1)}</code>;
+    if (part.startsWith("**") || part.startsWith("__")) return <strong key={key}>{part.slice(2, -2)}</strong>;
+    return <em key={key}>{part.slice(1, -1)}</em>;
   });
 }
 
@@ -83,37 +106,65 @@ type Block =
   | { kind: "ol"; items: string[] }
   | { kind: "code"; text: string };
 
+const FENCE = /^\s*```/;
+const HEADING = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/;
+const BULLET = /^\s*[-*•]\s+/;
+const NUMBERED = /^\s*\d{1,3}[.)]\s+/;
+
+function startsBlock(line: string): boolean {
+  return FENCE.test(line) || HEADING.test(line) || BULLET.test(line) || NUMBERED.test(line);
+}
+
+/** Every branch consumes at least one line, so the scan always terminates. */
 function parseBlocks(source: string): Block[] {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks: Block[] = [];
   let i = 0;
   while (i < lines.length) {
     const line = lines[i] ?? "";
-    if (line.trim() === "") { i += 1; continue; }
-    if (/^\s*```/.test(line)) {
+    if (line.trim() === "") {
+      i += 1;
+      continue;
+    }
+    if (FENCE.test(line)) {
       const buf: string[] = [];
       i += 1;
-      while (i < lines.length && !/^\s*```/.test(lines[i] ?? "")) { buf.push(lines[i] ?? ""); i += 1; }
-      i += 1;
+      while (i < lines.length && !FENCE.test(lines[i] ?? "")) {
+        buf.push(lines[i] ?? "");
+        i += 1;
+      }
+      i += 1; // closing fence (or end of input)
       blocks.push({ kind: "code", text: buf.join("\n") });
       continue;
     }
-    const heading = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
-    if (heading) { blocks.push({ kind: "h", level: heading[1]?.length ?? 1, text: heading[2] ?? "" }); i += 1; continue; }
-    if (/^\s*[-*•]\s+/.test(line)) {
+    const heading = HEADING.exec(line);
+    if (heading) {
+      blocks.push({ kind: "h", level: heading[1]?.length ?? 1, text: heading[2] ?? "" });
+      i += 1;
+      continue;
+    }
+    if (BULLET.test(line)) {
       const items: string[] = [];
-      while (i < lines.length && /^\s*[-*•]\s+/.test(lines[i] ?? "")) { items.push((lines[i] ?? "").replace(/^\s*[-*•]\s+/, "")); i += 1; }
+      while (i < lines.length && BULLET.test(lines[i] ?? "")) {
+        items.push((lines[i] ?? "").replace(BULLET, ""));
+        i += 1;
+      }
       blocks.push({ kind: "ul", items });
       continue;
     }
-    if (/^\s*\d{1,3}[.)]\s+/.test(line)) {
+    if (NUMBERED.test(line)) {
       const items: string[] = [];
-      while (i < lines.length && /^\s*\d{1,3}[.)]\s+/.test(lines[i] ?? "")) { items.push((lines[i] ?? "").replace(/^\s*\d{1,3}[.)]\s+/, "")); i += 1; }
+      while (i < lines.length && NUMBERED.test(lines[i] ?? "")) {
+        items.push((lines[i] ?? "").replace(NUMBERED, ""));
+        i += 1;
+      }
       blocks.push({ kind: "ol", items });
       continue;
     }
-    const buf: string[] = [];
-    while (i < lines.length && (lines[i] ?? "").trim() !== "" && !/^\s*(```|#{1,6}\s|[-*•]\s|\d{1,3}[.)]\s)/.test(lines[i] ?? "")) {
+    // Paragraph: the current line always belongs to it, whatever it looks like.
+    const buf: string[] = [line.trim()];
+    i += 1;
+    while (i < lines.length && (lines[i] ?? "").trim() !== "" && !startsBlock(lines[i] ?? "")) {
       buf.push((lines[i] ?? "").trim());
       i += 1;
     }

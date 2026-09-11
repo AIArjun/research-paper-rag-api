@@ -68,7 +68,6 @@ export const loginThrottle = createLoginThrottle();
 
 /** Derive a throttle key from the proxy-supplied client address (best effort only). */
 export function clientKey(headers: Headers): string {
-  const forwarded = headers.get("x-forwarded-for") ?? headers.get("x-real-ip") ?? "";
-  const first = forwarded.split(",")[0]?.trim() ?? "";
-  return first.slice(0, 64) || "unknown";
+  const forwarded = headers.get("x-forwarded-for")?.split(",")[0]?.trim() || headers.get("x-real-ip")?.trim() || "";
+  return forwarded.slice(0, 64) || "unknown";
 }
