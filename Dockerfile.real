@@ -1,0 +1,47 @@
+# Tested Linux x86_64 real profile; the existing Dockerfile remains the demo profile.
+FROM python:3.11-slim-bookworm@sha256:b1add8a6f2aca6bcfcf0b9c9b522352f7ce0d62a3d556a2f2f32511aa0cca250 AS runtime-base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    HF_HUB_DISABLE_XET=1 \
+    TOKENIZERS_PARALLELISM=false \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    ANONYMIZED_TELEMETRY=false
+
+WORKDIR /app
+COPY requirements-real.lock.txt ./
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-real.lock.txt && pip check
+
+# Pin the model revision and fetch only its safe tensor weights and tokenizer/config files.
+# This download is build-time only; runtime needs no Hugging Face credentials or network.
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='sentence-transformers/all-MiniLM-L6-v2', revision='1110a243fdf4706b3f48f1d95db1a4f5529b4d41', local_dir='/opt/models/all-MiniLM-L6-v2', allow_patterns=['*.json', '*.txt', 'model.safetensors'])"
+
+ENV EMBEDDING_MODEL=/opt/models/all-MiniLM-L6-v2 \
+    VECTORSTORE_PATH=/app/vectorstore \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    LLM_PROVIDER=openai \
+    PORT=8001
+
+RUN useradd --uid 10001 --create-home app && \
+    mkdir -p /app/vectorstore /app/uploads && chown -R app:app /app /opt/models
+COPY --chown=app:app app ./app
+USER app
+EXPOSE 8001
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port \"${PORT:-8001}\" --workers 1"]
+
+FROM runtime-base AS test
+USER root
+COPY requirements-real-test.lock.txt ./
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-real-test.lock.txt && pip check
+COPY --chown=app:app tests ./tests
+USER app
+ENV LLM_PROVIDER=demo
+CMD ["python", "-m", "pytest", "tests", "-q"]
+
+# Default build target must run the API, including when Render builds this file.
+FROM runtime-base AS runtime

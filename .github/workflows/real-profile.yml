@@ -1,0 +1,67 @@
+name: Real profile - isolated build and memory
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main, 'codex/**']
+    paths:
+      - 'app/**'
+      - 'tests/**'
+      - 'Dockerfile.real'
+      - 'requirements-real*'
+      - 'requirements-test*'
+      - 'scripts/measure_real_profile.py'
+      - '.github/workflows/real-profile.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-profile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build runtime with the pinned embedding snapshot
+        run: |
+          mkdir -p measurement-artifacts
+          set -o pipefail
+          docker build --file Dockerfile.real --target runtime --tag rag-real-profile:measurement . 2>&1 | tee measurement-artifacts/build-runtime.log
+
+      - name: Build test target with the same runtime dependencies
+        run: |
+          set -o pipefail
+          docker build --file Dockerfile.real --target test --tag rag-real-profile:test . 2>&1 | tee measurement-artifacts/build-test.log
+
+      - name: Run existing suite in the real dependency image without network
+        run: |
+          set -o pipefail
+          docker run --rm --network none --memory 2g --memory-swap 2g --cpus 1 \
+            --env LLM_PROVIDER=demo --env OPENAI_API_KEY= --env PORT=8001 \
+            --env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1 \
+            --entrypoint python rag-real-profile:test \
+            -m pytest tests/ -q -p no:cacheprovider 2>&1 | tee measurement-artifacts/tests.log
+
+      - name: Measure both isolated resource profiles
+        if: ${{ !cancelled() && success() }}
+        run: python scripts/measure_real_profile.py --skip-build --image rag-real-profile:measurement --output measurement-artifacts
+
+      - name: Publish evidence including failed resource profiles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-profile-${{ github.event.pull_request.head.sha || github.sha }}
+          path: measurement-artifacts/
+          if-no-files-found: warn
+          retention-days: 14

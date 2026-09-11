@@ -1,0 +1,393 @@
+{
+  "started_at": "2026-09-11T07:51:58.220466+00:00",
+  "status": "passed",
+  "cases": [
+    {
+      "started_at": "2026-09-11T07:51:58.838876+00:00",
+      "image": "rag-real-profile:measurement",
+      "limits": {
+        "memory": "512m",
+        "memory_swap_total": "512m",
+        "cpus": "0.1",
+        "network": "none"
+      },
+      "startup_contract": {
+        "PORT": 8765,
+        "WEB_CONCURRENCY": 4,
+        "expected_workers": 1
+      },
+      "status": "failed",
+      "snapshots": {
+        "last_startup": {
+          "captured_at": "2026-09-11T07:54:06.537421+00:00",
+          "memory.current": "473989120",
+          "memory.peak": "477798400",
+          "memory.max": "536870912",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+          "cpu.max": "10000 100000",
+          "pid1_memory_kib": {
+            "VmHWM": 587444,
+            "VmRSS": 587444
+          },
+          "pid1_argv": [
+            "/usr/local/bin/python3.11",
+            "/usr/local/bin/uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8765",
+            "--workers",
+            "1"
+          ]
+        },
+        "idle": {
+          "captured_at": "2026-09-11T07:54:09.835101+00:00",
+          "memory.current": "474165248",
+          "memory.peak": "479539200",
+          "memory.max": "536870912",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+          "cpu.max": "10000 100000",
+          "pid1_memory_kib": {
+            "VmHWM": 587564,
+            "VmRSS": 587564
+          },
+          "pid1_argv": [
+            "/usr/local/bin/python3.11",
+            "/usr/local/bin/uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8765",
+            "--workers",
+            "1"
+          ]
+        }
+      },
+      "requests": {},
+      "scope": "Local embeddings and Chroma; provider client construction only; no generation or relevance evaluation.",
+      "measurement_note": "cgroup totals include temporary docker-exec HTTP/observer processes; PID 1 RSS is app-process memory.",
+      "last_startup_probe_error": "usr/local/lib/python3.11/urllib/request.py\", line 216, in urlopen\n    return opener.open(url, data, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/urllib/request.py\", line 519, in open\n    response = self._open(req, data)\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/urllib/request.py\", line 536, in _open\n    result = self._call_chain(self.handle_open, protocol, protocol +\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/urllib/request.py\", line 496, in _call_chain\n    result = func(*args)\n             ^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/urllib/request.py\", line 1377, in http_open\n    return self.do_open(http.client.HTTPConnection, req)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/urllib/request.py\", line 1351, in do_open\n    raise URLError(err)\nurllib.error.URLError: <urlopen error [Errno 111] Connection refused>\n",
+      "time_to_ready_seconds": 129.998,
+      "ready_response": {
+        "status": 200,
+        "body": {
+          "ready": true,
+          "configured_provider": "openai",
+          "configured_model": "gpt-4o-mini",
+          "effective_retrieval": "chroma",
+          "effective_generation": "openai",
+          "init_error": null,
+          "pending_cleanup_ids": [],
+          "provider_connection_verified": false
+        }
+      },
+      "error": "RuntimeError: docker exec failed (137): Traceback (most recent call last):\n  File \"<string>\", line 23, in <module>\n  File \"/usr/local/lib/python3.11/urllib/request.py\", line 216, in urlopen\n    return opener.open(url, data, timeout)\n",
+      "container_state_before_cleanup": {
+        "Status": "exited",
+        "Running": false,
+        "Paused": false,
+        "Restarting": false,
+        "OOMKilled": true,
+        "Dead": false,
+        "Pid": 0,
+        "ExitCode": 137,
+        "Error": "",
+        "StartedAt": "2026-09-11T07:51:58.894249011Z",
+        "FinishedAt": "2026-09-11T07:54:19.728880125Z"
+      },
+      "observed_oom_kill_count": 0,
+      "finished_at": "2026-09-11T07:54:19.790221+00:00"
+    },
+    {
+      "started_at": "2026-09-11T07:54:20.006534+00:00",
+      "image": "rag-real-profile:measurement",
+      "limits": {
+        "memory": "2g",
+        "memory_swap_total": "2g",
+        "cpus": "1",
+        "network": "none"
+      },
+      "startup_contract": {
+        "PORT": 8765,
+        "WEB_CONCURRENCY": 4,
+        "expected_workers": 1
+      },
+      "status": "passed",
+      "snapshots": {
+        "last_startup": {
+          "captured_at": "2026-09-11T07:54:31.247012+00:00",
+          "memory.current": "474173440",
+          "memory.peak": "477929472",
+          "memory.max": "2147483648",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+          "cpu.max": "100000 100000",
+          "pid1_memory_kib": {
+            "VmHWM": 587124,
+            "VmRSS": 587124
+          },
+          "pid1_argv": [
+            "/usr/local/bin/python3.11",
+            "/usr/local/bin/uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8765",
+            "--workers",
+            "1"
+          ]
+        },
+        "idle": {
+          "captured_at": "2026-09-11T07:54:31.593155+00:00",
+          "memory.current": "474382336",
+          "memory.peak": "479707136",
+          "memory.max": "2147483648",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+          "cpu.max": "100000 100000",
+          "pid1_memory_kib": {
+            "VmHWM": 587312,
+            "VmRSS": 587312
+          },
+          "pid1_argv": [
+            "/usr/local/bin/python3.11",
+            "/usr/local/bin/uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8765",
+            "--workers",
+            "1"
+          ]
+        },
+        "after_attention-is-all-you-need.pdf": {
+          "captured_at": "2026-09-11T07:54:39.768224+00:00",
+          "memory.current": "652922880",
+          "memory.peak": "818978816",
+          "memory.max": "2147483648",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+          "cpu.max": "100000 100000",
+          "pid1_memory_kib": {
+            "VmHWM": 1008988,
+            "VmRSS": 857312
+          },
+          "pid1_argv": [
+            "/usr/local/bin/python3.11",
+            "/usr/local/bin/uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8765",
+            "--workers",
+            "1"
+          ]
+        },
+        "after_retrieval-augmented-generation.pdf": {
+          "captured_at": "2026-09-11T07:54:52.247946+00:00",
+          "memory.current": "770961408",
+          "memory.peak": "964304896",
+          "memory.max": "2147483648",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+          "cpu.max": "100000 100000",
+          "pid1_memory_kib": {
+            "VmHWM": 1157436,
+            "VmRSS": 972600
+          },
+          "pid1_argv": [
+            "/usr/local/bin/python3.11",
+            "/usr/local/bin/uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8765",
+            "--workers",
+            "1"
+          ]
+        },
+        "after_query": {
+          "captured_at": "2026-09-11T07:54:53.106644+00:00",
+          "memory.current": "771457024",
+          "memory.peak": "964304896",
+          "memory.max": "2147483648",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+          "cpu.max": "100000 100000",
+          "pid1_memory_kib": {
+            "VmHWM": 1157436,
+            "VmRSS": 973360
+          },
+          "pid1_argv": [
+            "/usr/local/bin/python3.11",
+            "/usr/local/bin/uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8765",
+            "--workers",
+            "1"
+          ]
+        },
+        "final": {
+          "captured_at": "2026-09-11T07:54:53.232279+00:00",
+          "memory.current": "771604480",
+          "memory.peak": "964304896",
+          "memory.max": "2147483648",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+          "cpu.max": "100000 100000",
+          "pid1_memory_kib": {
+            "VmHWM": 1157436,
+            "VmRSS": 973360
+          },
+          "pid1_argv": [
+            "/usr/local/bin/python3.11",
+            "/usr/local/bin/uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8765",
+            "--workers",
+            "1"
+          ]
+        }
+      },
+      "requests": {
+        "attention-is-all-you-need.pdf": {
+          "status": 200,
+          "body": {
+            "paper_id": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+            "filename": "attention-is-all-you-need.pdf",
+            "pages": 15,
+            "chunks": 97,
+            "processing_time_ms": 7752.82,
+            "message": "Paper 'attention-is-all-you-need.pdf' is indexed. 97 chunks available."
+          }
+        },
+        "retrieval-augmented-generation.pdf": {
+          "status": 200,
+          "body": {
+            "paper_id": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+            "filename": "retrieval-augmented-generation.pdf",
+            "pages": 19,
+            "chunks": 171,
+            "processing_time_ms": 12114.16,
+            "message": "Paper 'retrieval-augmented-generation.pdf' is indexed. 171 chunks available."
+          }
+        },
+        "duplicate": {
+          "status": 200,
+          "body": {
+            "paper_id": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+            "filename": "attention-is-all-you-need.pdf",
+            "pages": 15,
+            "chunks": 97,
+            "processing_time_ms": 1.26,
+            "message": "Paper 'attention-is-all-you-need.pdf' is indexed. 97 chunks available."
+          }
+        },
+        "papers": {
+          "status": 200,
+          "body": [
+            {
+              "paper_id": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+              "filename": "attention-is-all-you-need.pdf",
+              "pages": 15,
+              "chunks": 97,
+              "uploaded_at": "2026-09-11T07:54:33.731472+00:00",
+              "status": "ready"
+            },
+            {
+              "paper_id": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+              "filename": "retrieval-augmented-generation.pdf",
+              "pages": 19,
+              "chunks": 171,
+              "uploaded_at": "2026-09-11T07:54:41.606191+00:00",
+              "status": "ready"
+            }
+          ]
+        },
+        "empty_filter_query": {
+          "status": 200,
+          "body": {
+            "request_id": "8f45bdad",
+            "question": "What is the attention mechanism?",
+            "answer": "The retrieved sources contain insufficient evidence to answer this question.",
+            "citations": [],
+            "papers_searched": 0,
+            "retrieval_time_ms": 20.67,
+            "generation_time_ms": 0.0,
+            "total_time_ms": 20.67,
+            "model_used": "not-invoked"
+          }
+        }
+      },
+      "scope": "Local embeddings and Chroma; provider client construction only; no generation or relevance evaluation.",
+      "measurement_note": "cgroup totals include temporary docker-exec HTTP/observer processes; PID 1 RSS is app-process memory.",
+      "last_startup_probe_error": "usr/local/lib/python3.11/urllib/request.py\", line 216, in urlopen\n    return opener.open(url, data, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/urllib/request.py\", line 519, in open\n    response = self._open(req, data)\n               ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/urllib/request.py\", line 536, in _open\n    result = self._call_chain(self.handle_open, protocol, protocol +\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/urllib/request.py\", line 496, in _call_chain\n    result = func(*args)\n             ^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/urllib/request.py\", line 1377, in http_open\n    return self.do_open(http.client.HTTPConnection, req)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/urllib/request.py\", line 1351, in do_open\n    raise URLError(err)\nurllib.error.URLError: <urlopen error [Errno 111] Connection refused>\n",
+      "time_to_ready_seconds": 11.47,
+      "ready_response": {
+        "status": 200,
+        "body": {
+          "ready": true,
+          "configured_provider": "openai",
+          "configured_model": "gpt-4o-mini",
+          "effective_retrieval": "chroma",
+          "effective_generation": "openai",
+          "init_error": null,
+          "pending_cleanup_ids": [],
+          "provider_connection_verified": false
+        }
+      },
+      "container_state_before_cleanup": {
+        "Status": "running",
+        "Running": true,
+        "Paused": false,
+        "Restarting": false,
+        "OOMKilled": false,
+        "Dead": false,
+        "Pid": 3824,
+        "ExitCode": 0,
+        "Error": "",
+        "StartedAt": "2026-09-11T07:54:20.049815423Z",
+        "FinishedAt": "0001-01-01T00:00:00Z"
+      },
+      "observed_oom_kill_count": 0,
+      "finished_at": "2026-09-11T07:54:53.248298+00:00"
+    }
+  ],
+  "real_generation_verified": false,
+  "semantic_relevance_verified": false,
+  "external_runtime_network": "disabled",
+  "commit": "1512585932ee952428eeb629286a16e01aa448c5",
+  "docker_platform": "linux/x86_64",
+  "image_id": "sha256:ab1cbd1a1e07ebd23695133a58a6fa503ed3721654f86185572fc078992b8bb9",
+  "image_bytes": 2052790318,
+  "fixtures": [
+    {
+      "file": "attention-is-all-you-need.pdf",
+      "source_url": "https://arxiv.org/pdf/1706.03762",
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "pages": 15,
+      "chunks": 97
+    },
+    {
+      "file": "retrieval-augmented-generation.pdf",
+      "source_url": "https://arxiv.org/pdf/2005.11401",
+      "sha256": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+      "pages": 19,
+      "chunks": 171
+    }
+  ],
+  "passing_limits": {
+    "memory": "2g",
+    "memory_swap_total": "2g",
+    "cpus": "1",
+    "network": "none"
+  },
+  "comparison_limit": "Fallback changes both memory and CPU; this is not an equal-CPU capacity comparison or a Render measurement.",
+  "finished_at": "2026-09-11T07:54:53.778561+00:00"
+}
