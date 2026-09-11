@@ -30,6 +30,10 @@ if [ "$(id -u)" -eq 0 ]; then
             fi
         done
     fi
+    # setpriv keeps the environment; give the runtime user its own home so
+    # libraries that touch ~/.cache never see root's directory.
+    HOME=$(getent passwd "$RUNTIME_USER" | cut -d: -f6)
+    export HOME="${HOME:-/home/$RUNTIME_USER}" USER="$RUNTIME_USER" LOGNAME="$RUNTIME_USER"
     exec setpriv --reuid="$RUNTIME_USER" --regid="$RUNTIME_USER" --init-groups \
         --inh-caps=-all --bounding-set=-all --no-new-privs -- "$@"
 fi

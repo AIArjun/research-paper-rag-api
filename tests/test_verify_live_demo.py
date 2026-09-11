@@ -32,6 +32,7 @@ class FakeDemo:
         self.calls_total = 0
         self.ledger_created_at = "2026-09-11T10:00:00+00:00"
         self.fail_live_after = None  # index of the live call that answers 502
+        self.live_unaccounted = False  # answer 200 without a model call or ledger charge
         self.lock = threading.Lock()
 
     def ready(self):
@@ -105,7 +106,15 @@ def _handler(state: FakeDemo):
                     index = sum(1 for r in state.requests if r["kind"] == "live")
                     state.requests.append({"method": "POST", "path": "/query", "kind": "live",
                                            "authorized": True, "question": body["question"]})
-                    state.calls_total += 1  # a failed attempt stays charged, like the real ledger
+                    if not state.live_unaccounted:
+                        state.calls_total += 1  # a failed attempt stays charged, like the real ledger
+                if state.live_unaccounted:
+                    return self._send(200, {"request_id": "r", "question": body["question"], "answer": "Demo.",
+                                            "citations": [{"text": "N = 6", "page": 3, "paper": "a.pdf",
+                                                           "relevance_score": 0.5}],
+                                            "papers_searched": 1, "retrieval_time_ms": 1.0,
+                                            "generation_time_ms": 0.0, "total_time_ms": 1.0,
+                                            "model_used": "demo-mode", "model_usage": None})
                 if state.fail_live_after is not None and index >= state.fail_live_after:
                     return self._send(502, {"detail": {"category": "generation_failed"}})
                 return self._send(200, {"request_id": "r", "question": body["question"], "answer": "Six layers.",
@@ -205,13 +214,47 @@ def test_more_than_the_hard_cap_is_refused_by_the_parser(fake_demo, tmp_path, fi
     assert fake_demo.requests == []
 
 
-def test_a_failed_live_call_is_not_retried_and_stops_the_live_phase(fake_demo, tmp_path, fixtures):
+def test_a_failed_live_call_is_not_retried_stops_the_live_phase_and_fails_the_run(fake_demo, tmp_path, fixtures):
     fake_demo.fail_live_after = 0
     code, evidence, _ = _run(fake_demo, tmp_path, fixtures, "--live", "--max-live-calls", "3")
-    assert code == 0  # the safe phase passed; the live outcome is recorded, not retried
-    assert _kinds(fake_demo).count("live") == 1
+    assert code == 1
+    assert _kinds(fake_demo).count("live") == 1  # one attempt, no retry, no further question
+    assert evidence["checks"]["safe_phase_passed"] is True
+    assert evidence["checks"]["live_phase_passed"] is False
     assert evidence["live_stopped_early"] == {"after_calls": 1, "status": 502}
+    assert evidence["live"][0]["accounted"] is False
+    assert "status_not_200" in evidence["live"][0]["failure_reasons"]
     assert evidence["live"][0]["ledger_delta"]["calls_total"] == 1  # the failed attempt stayed charged
+
+
+def test_a_live_answer_without_model_backing_or_accounting_fails_the_run(fake_demo, tmp_path, fixtures):
+    fake_demo.live_unaccounted = True
+    code, evidence, _ = _run(fake_demo, tmp_path, fixtures, "--live", "--max-live-calls", "2")
+    assert code == 1
+    assert evidence["checks"]["live_phase_passed"] is False
+    assert all(result["accounted"] is False for result in evidence["live"])
+    reasons = set(evidence["live"][0]["failure_reasons"])
+    assert {"model_used_not_configured_model", "usage_not_measured", "ledger_calls_delta_not_one"} <= reasons
+
+
+def test_an_accounted_live_run_passes(fake_demo, tmp_path, fixtures):
+    code, evidence, _ = _run(fake_demo, tmp_path, fixtures, "--live", "--max-live-calls", "1")
+    assert code == 0
+    assert evidence["checks"]["live_phase_passed"] is True
+    assert evidence["live"][0]["accounted"] is True and evidence["live"][0]["failure_reasons"] == []
+
+
+def test_a_declared_page_or_chunk_mismatch_fails_preflight_and_blocks_paid_calls(fake_demo, tmp_path, fixtures):
+    manifest = json.loads(Path(fixtures["manifest"]).read_text())
+    manifest[1]["chunks"] = 999
+    Path(fixtures["manifest"]).write_text(json.dumps(manifest))
+    code, evidence, _ = _run(fake_demo, tmp_path, fixtures, "--live", "--max-live-calls", "3")
+    assert code == 1
+    assert evidence["checks"]["uploads_200"] is True
+    assert evidence["checks"]["uploads_match_expected"] is False
+    assert evidence["checks"]["safe_phase_passed"] is False
+    assert "live" not in _kinds(fake_demo)
+    assert "live" not in evidence
 
 
 def test_missing_token_is_refused_before_any_request(fake_demo, tmp_path, fixtures):
@@ -247,8 +290,14 @@ def test_ledger_comparison_detects_a_replaced_ledger(fake_demo, tmp_path, fixtur
     assert second["checks"]["ledger_persisted"] is True
 
     fake_demo.ledger_created_at = "2026-09-11T12:00:00+00:00"  # a fresh ledger after a bad deploy
-    code = verify.main(["--base-url", fake_demo.base_url, "--output", str(tmp_path / "third"), "--skip-uploads",
-                        "--compare-ledger", str(previous)], {"DEMO_ACCESS_TOKEN": TEST_ACCESS_TOKEN})
+    kinds_before = list(_kinds(fake_demo))
+    code = verify.main(["--base-url", fake_demo.base_url, "--output", str(tmp_path / "third"),
+                        "--compare-ledger", str(previous), "--live", "--max-live-calls", "3"],
+                       {"DEMO_ACCESS_TOKEN": TEST_ACCESS_TOKEN})
     assert code == 1
     third = json.loads(next((tmp_path / "third").glob("*.json")).read_text())
     assert third["checks"]["ledger_persisted"] is False
+    assert third["checks"]["safe_phase_passed"] is False
+    # Discovered on the first snapshot: only readiness reads followed, no upload and no paid call.
+    assert set(_kinds(fake_demo)[len(kinds_before):]) == {"ready"}
+    assert "live" not in third and third.get("uploads") is None

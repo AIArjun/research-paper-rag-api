@@ -21,8 +21,17 @@ retry, and stops at the first non-200 answer. Every call is bracketed by two
 /ready snapshots so the measured ledger delta is recorded next to the
 provider-reported model_usage.
 
---compare-ledger PREVIOUS.json checks that the ledger identity and counts in
-an earlier evidence file survived a deploy or restart.
+--compare-ledger PREVIOUS.json checks, on the very first /ready snapshot and
+before any upload or paid call, that the ledger identity and counts in an
+earlier evidence file survived a deploy or restart; a replaced ledger stops
+the run.
+
+Exit status: 0 when every recorded check passed (safe checks, the ledger
+comparison when requested, and with --live every call answered 200 from the
+configured model with measured usage confirmed by the ledger delta); 1 when a
+check failed or a precondition aborted the run; 2 when the token was missing
+or would have appeared in the evidence. Semantic answer quality and citation
+support are judged manually from the evidence files (docs/STAGE3.md).
 """
 
 import argparse
@@ -226,6 +235,12 @@ def safe_phase(client: Client, args, evidence: dict) -> bool:
     checks["ready_before_200"] = before.get("status") == 200
     if before.get("status") != 200:
         return False
+    if args.compare_ledger:
+        # A replaced ledger must be discovered on the first snapshot, never after spending.
+        evidence["ledger_comparison"] = compare_ledger(args.compare_ledger, before)
+        checks["ledger_persisted"] = evidence["ledger_comparison"]["ledger_persisted"]
+        if not checks["ledger_persisted"]:
+            return False
 
     missing = client.request("GET", "/papers", credential="none", timeout=30)
     wrong = client.request("GET", "/papers", credential="wrong", timeout=30)
@@ -241,6 +256,7 @@ def safe_phase(client: Client, args, evidence: dict) -> bool:
 
     uploads = []
     all_uploads_ok = True
+    all_uploads_match = True
     if not args.skip_uploads:
         for entry in load_manifest(args.manifest):
             content = fixture_bytes(entry, Path(args.fixture_dir), args.download_fixtures)
@@ -255,12 +271,16 @@ def safe_phase(client: Client, args, evidence: dict) -> bool:
                 record["matches_expected"] = all(
                     body.get(key) == entry[key] for key in ("pages", "chunks") if key in entry
                 )
+                all_uploads_match = all_uploads_match and record["matches_expected"]
             else:
                 all_uploads_ok = False
             uploads.append(record)
         evidence["papers_after_upload"] = client.request("GET", "/papers", timeout=30)
     evidence["uploads"] = uploads
     checks["uploads_200"] = all_uploads_ok
+    # A paper that ingested with other page/chunk counts than declared is not the
+    # reviewed fixture; the safe phase fails and no paid call is attempted.
+    checks["uploads_match_expected"] = all_uploads_match
 
     abstention = client.request(
         "POST", "/query",
@@ -283,15 +303,48 @@ def safe_phase(client: Client, args, evidence: dict) -> bool:
         and ledger_view(after)["ledger_created_at"] == ledger_view(before)["ledger_created_at"]
     )
     return all(checks[name] for name in (
-        "ready_before_200", "missing_token_401", "wrong_token_401", "authenticated_list_200",
-        "uploads_200", "abstention_not_invoked", "no_model_call_in_safe_phase",
-    ))
+        "ready_before_200", "ledger_persisted", "missing_token_401", "wrong_token_401", "authenticated_list_200",
+        "uploads_200", "uploads_match_expected", "abstention_not_invoked", "no_model_call_in_safe_phase",
+    ) if name in checks)
+
+
+def accounted_live_result(answer: dict, delta: dict, expected_model) -> list[str]:
+    """Mechanical reasons a live answer is not an accounted model-backed answer (empty means accounted).
+
+    Semantic quality and citation support stay a manual judgment (docs/STAGE3.md).
+    """
+    reasons = []
+    body = answer.get("body") if isinstance(answer.get("body"), dict) else {}
+    usage = body.get("model_usage") if isinstance(body.get("model_usage"), dict) else None
+    if answer.get("status") != 200:
+        reasons.append("status_not_200")
+    if body.get("model_used") in (None, "not-invoked", "demo-mode") or (
+        expected_model and body.get("model_used") != expected_model
+    ):
+        reasons.append("model_used_not_configured_model")
+    if not body.get("citations"):
+        reasons.append("no_citations")
+    if usage is None or usage.get("accounting") != "measured" \
+            or type(usage.get("input_tokens")) is not int or type(usage.get("output_tokens")) is not int:
+        reasons.append("usage_not_measured")
+    if delta.get("calls_total") != 1:
+        reasons.append("ledger_calls_delta_not_one")
+    if usage is not None and type(usage.get("tokens_charged")) is int \
+            and delta.get("tokens_charged_total") != usage["tokens_charged"]:
+        reasons.append("ledger_tokens_delta_mismatch")
+    return reasons
 
 
 def live_phase(client: Client, args, evidence: dict) -> None:
-    """Explicit, bounded paid calls: one attempt each, stop at the first non-200."""
+    """Explicit, bounded paid calls: one attempt each, no retry, stop at the first non-200.
+
+    Sets checks.live_phase_passed: every attempted call answered 200 from the
+    configured model with measured usage that the ledger delta confirms.
+    """
     questions = load_questions(args.questions)[: args.max_live_calls]
+    expected_model = ledger_view(evidence.get("ready_before") or {}).get("configured_model")
     results = []
+    all_accounted = True
     for item in questions:
         before = client.request("GET", "/ready", credential="none", timeout=30)
         payload = {"question": item["question"], "top_k": int(item.get("top_k", 5))}
@@ -304,15 +357,19 @@ def live_phase(client: Client, args, evidence: dict) -> None:
         for key in ("calls_total", "tokens_charged_total", "tokens_measured_total"):
             if isinstance(before_view.get(key), int) and isinstance(after_view.get(key), int):
                 delta[key] = after_view[key] - before_view[key]
+        reasons = accounted_live_result(answer, delta, expected_model)
+        all_accounted = all_accounted and not reasons
         results.append({
             "id": item.get("id"), "request": payload, "expected_support": item.get("expected_support"),
             "ledger_before": before_view, "response": answer, "ledger_after": after_view, "ledger_delta": delta,
+            "accounted": not reasons, "failure_reasons": reasons,
         })
         if answer.get("status") != 200:
             evidence["live_stopped_early"] = {"after_calls": len(results), "status": answer.get("status")}
             break
     evidence["live"] = results
     evidence["checks"]["live_calls_attempted"] = len(results)
+    evidence["checks"]["live_phase_passed"] = all_accounted and "live_stopped_early" not in evidence
 
 
 def compare_ledger(previous_path: str, current_ready: dict) -> dict:
@@ -361,6 +418,8 @@ def render_markdown(evidence: dict) -> str:
             body = result["response"].get("body") if isinstance(result["response"].get("body"), dict) else {}
             lines += [
                 "### " + str(result.get("id")),
+                "", "Accounted: " + json.dumps(result.get("accounted")) + " "
+                + json.dumps(result.get("failure_reasons")),
                 "", "Question: " + result["request"]["question"],
                 "", "Expected support: " + str(result.get("expected_support")),
                 "", "Status: " + str(result["response"].get("status")) + "; model_used: "
@@ -434,12 +493,9 @@ def main(argv=None, environ=None) -> int:
             exit_code = 1
         if args.live and safe_ok:
             live_phase(client, args, evidence)
-        evidence["ready_final"] = client.request("GET", "/ready", credential="none", timeout=30)
-        if args.compare_ledger:
-            evidence["ledger_comparison"] = compare_ledger(args.compare_ledger, evidence["ready_final"])
-            evidence["checks"]["ledger_persisted"] = evidence["ledger_comparison"]["ledger_persisted"]
-            if not evidence["ledger_comparison"]["ledger_persisted"]:
+            if not evidence["checks"]["live_phase_passed"]:
                 exit_code = 1
+        evidence["ready_final"] = client.request("GET", "/ready", credential="none", timeout=30)
     except VerificationError as error:
         evidence["aborted"] = str(error)
         exit_code = 1

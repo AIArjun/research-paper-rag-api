@@ -193,7 +193,7 @@ def measure_case(image, memory, cpus, directory, fixture_dir, ready_timeout):
             "--network", "none", "--memory", memory, "--memory-swap", memory, "--cpus", cpus,
             # A root-owned, non-world-writable mount like a platform disk: the
             # ledger is only creatable there if the entrypoint prepared the directory.
-            "--mount", "type=tmpfs,destination=/var/data,tmpfs-mode=0755,tmpfs-size=16m",
+            "--mount", "type=tmpfs,destination=/var/data,tmpfs-mode=0755,tmpfs-size=16777216",
             "--env", "LLM_PROVIDER=openai", "--env", "OPENAI_API_KEY=offline-placeholder-not-a-credential",
             "--env", "LLM_MODEL=gpt-4o-mini", "--env", "PORT=8765", "--env", "WEB_CONCURRENCY=4",
             "--env", "HF_HUB_OFFLINE=1", "--env", "TRANSFORMERS_OFFLINE=1",
