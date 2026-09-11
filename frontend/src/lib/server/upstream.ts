@@ -60,15 +60,18 @@ export async function callUpstream(
   }
 
   let body: unknown = null;
+  let bodyProblem: "timeout" | "backend_error" | null = null;
   try {
+    // The timer keeps running while the body streams, so a slow body is still a timeout.
     const text = await response.text();
     body = text.length > 0 ? JSON.parse(text) : null;
-  } catch {
-    clearTimeout(timer);
-    if (response.ok) return { ok: false, status: 502, error: apiError("backend_error") };
+  } catch (error) {
+    bodyProblem = error instanceof Error && error.name === "AbortError" ? "timeout" : "backend_error";
   } finally {
     clearTimeout(timer);
   }
+  if (bodyProblem === "timeout") return { ok: false, status: 504, error: apiError("timeout") };
+  if (bodyProblem === "backend_error" && response.ok) return { ok: false, status: 502, error: apiError("backend_error") };
 
   if (!response.ok) {
     const mapped = mapUpstreamError(response.status, body, response.headers);

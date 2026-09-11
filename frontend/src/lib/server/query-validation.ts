@@ -1,4 +1,5 @@
 import {
+  DEFAULT_TOP_K,
   PAPER_ID_PATTERN,
   QUESTION_MAX_CHARS,
   QUESTION_MIN_CHARS,
@@ -16,7 +17,7 @@ export interface ValidQuery {
 export function validateQuery(input: Record<string, unknown>): ValidQuery | null {
   const question = typeof input.question === "string" ? input.question.trim() : "";
   if (question.length < QUESTION_MIN_CHARS || question.length > QUESTION_MAX_CHARS) return null;
-  const top_k = input.top_k === undefined ? TOP_K_MAX : input.top_k;
+  const top_k = input.top_k === undefined || input.top_k === null ? DEFAULT_TOP_K : input.top_k;
   if (typeof top_k !== "number" || !Number.isInteger(top_k) || top_k < TOP_K_MIN || top_k > TOP_K_MAX) return null;
   const valid: ValidQuery = { question, top_k };
   if (input.paper_id !== undefined && input.paper_id !== null) {

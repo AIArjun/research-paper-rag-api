@@ -33,7 +33,11 @@ export async function checkUploadForm(bytes: Uint8Array<ArrayBuffer>, contentTyp
   if (!(file instanceof File)) return { ok: false, status: 400, category: "invalid_request" };
   if (file.size > MAX_PDF_BYTES) return { ok: false, status: 413, category: "file_too_large" };
   if (file.size === 0) return { ok: false, status: 400, category: "invalid_pdf" };
-  if (file.type && file.type !== "application/pdf") return { ok: false, status: 400, category: "invalid_pdf" };
+  // Multipart parsing reports an untyped part as application/octet-stream; the
+  // %PDF- header check below is what actually vouches for the content.
+  if (file.type && file.type !== "application/pdf" && file.type !== "application/octet-stream") {
+    return { ok: false, status: 400, category: "invalid_pdf" };
+  }
   const name = safePdfName(file.name);
   if (!name) return { ok: false, status: 400, category: "invalid_pdf" };
   const fileBytes = new Uint8Array(await file.arrayBuffer());

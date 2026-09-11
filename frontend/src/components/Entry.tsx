@@ -41,8 +41,7 @@ export function Entry({ configured }: Props) {
           Research <span className="entry__title-accent">Observatory</span>
         </h1>
         <p className="entry__lede">
-          A reading room for public papers: real retrieval over indexed PDFs, cited answers, and the physical
-          page behind every citation.
+          Ask questions of public papers. Read the answer, inspect the evidence, and open the cited page.
         </p>
         {configured ? (
           <form className="entry__form" onSubmit={submit} noValidate>
@@ -75,8 +74,7 @@ export function Entry({ configured }: Props) {
           </form>
         ) : (
           <p className="entry__status entry__status--block" role="status">
-            The observatory is not configured yet: the server environment (RAG_API_URL, RAG_API_TOKEN, DEMO_PASSCODE,
-            SESSION_SECRET) must be set before anyone can enter.
+            The observatory is not open yet. The operator needs to finish the server setup before anyone can enter.
           </p>
         )}
         <p className="entry__footnote">

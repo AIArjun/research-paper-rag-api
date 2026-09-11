@@ -45,7 +45,7 @@ export function trustedOrigins(env: Env): { origins: string[]; problems: string[
   for (const entry of configured) {
     const origin = normalizeOrigin(entry);
     if (origin) origins.add(origin);
-    else problems.push(`APP_ORIGIN entry is not a plain origin: ${entry.slice(0, 40)}`);
+    else problems.push("APP_ORIGIN contains an entry that is not a plain origin (scheme://host[:port])");
   }
   for (const key of ["VERCEL_PROJECT_PRODUCTION_URL", "VERCEL_BRANCH_URL", "VERCEL_URL"] as const) {
     const host = env[key]?.trim();

@@ -15,21 +15,29 @@ export function passcodeMatches(supplied: unknown, expected: string): boolean {
 /**
  * Best-effort, per-instance login throttle. Serverless instances do not share
  * memory, so this slows brute force on one instance; the passcode's length is
- * the real defence.
+ * the real defence. The map is hard-capped so unique keys cannot grow it
+ * without bound.
  */
 export interface Throttle {
   check(key: string, nowMs: number): { allowed: boolean; retryAfterSeconds: number };
   recordFailure(key: string, nowMs: number): void;
   reset(): void;
+  /** Number of tracked keys (bounded by maxEntries). */
+  size(): number;
 }
 
-export function createLoginThrottle(maxFailures = 10, windowMs = 15 * 60 * 1000): Throttle {
+export function createLoginThrottle(maxFailures = 10, windowMs = 15 * 60 * 1000, maxEntries = 5000): Throttle {
   const failures = new Map<string, { count: number; windowStart: number }>();
-  const prune = (nowMs: number) => {
-    if (failures.size < 1000) return;
+  /** Hard ceiling on tracked keys: expired entries go first, then the oldest windows. */
+  const enforceCeiling = (nowMs: number) => {
+    if (failures.size < maxEntries) return;
     for (const [key, entry] of failures) {
       if (nowMs - entry.windowStart > windowMs) failures.delete(key);
     }
+    if (failures.size < maxEntries) return;
+    const oldestFirst = [...failures.entries()].sort((a, b) => a[1].windowStart - b[1].windowStart);
+    const excess = failures.size - maxEntries + 1;
+    for (const [key] of oldestFirst.slice(0, excess)) failures.delete(key);
   };
   return {
     check(key, nowMs) {
@@ -39,13 +47,19 @@ export function createLoginThrottle(maxFailures = 10, windowMs = 15 * 60 * 1000)
       return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((entry.windowStart + windowMs - nowMs) / 1000)) };
     },
     recordFailure(key, nowMs) {
-      prune(nowMs);
       const entry = failures.get(key);
-      if (!entry || nowMs - entry.windowStart > windowMs) failures.set(key, { count: 1, windowStart: nowMs });
-      else entry.count += 1;
+      if (entry && nowMs - entry.windowStart <= windowMs) {
+        entry.count += 1;
+        return;
+      }
+      enforceCeiling(nowMs);
+      failures.set(key, { count: 1, windowStart: nowMs });
     },
     reset() {
       failures.clear();
+    },
+    size() {
+      return failures.size;
     },
   };
 }

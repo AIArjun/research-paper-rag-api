@@ -2,6 +2,8 @@
 
 A private-demo workspace for the Research Paper RAG API, by Arjunworks. Next.js App Router + TypeScript, plain CSS, no client-side secrets.
 
+Requires Node.js 22.22.2+ or 24.15.0+ (the jsdom test environment sets that floor); Vercel's Node 22.x runtime and the CI's Node 22 satisfy it.
+
 - **Entry**: a passcode gate. A successful passcode sets a signed, HttpOnly, `SameSite=Lax` session cookie (12 h).
 - **Workspace**: paper library and selection, bounded PDF upload (up to 4 MB), question composer, real answers with citations, a source constellation tied to the returned citations, and physical-page inspection of the cited PDF page.
 - **BFF**: every backend call goes through server-side route handlers under `src/app/api/`. The browser never sees the Render bearer token. Routes are allowlisted (`/ready`, `/papers`, `/papers/upload`, `/query`), bodies are bounded, responses are `no-store`, and upstream error text is replaced by categorized messages.
