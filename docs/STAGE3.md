@@ -74,7 +74,7 @@ python scripts/verify_live_demo.py --base-url https://research-paper-rag-api.onr
   --output stage3-evidence --skip-uploads --live --max-live-calls 3
 ```
 
-Each run writes `stage3-evidence/stage3-evidence-<UTC>.json` (every response, request ids, ledger snapshots before and after each call) and a `.md` rendering. Exit code 0 means every recorded check passed: the safe checks including declared page/chunk counts of the uploads, the ledger comparison when requested (evaluated on the first `/ready` snapshot, before any upload or paid call), and with `--live` every call answered 200 from the configured model with `measured` usage that the ledger delta confirms (`checks.live_phase_passed`, per-call `accounted` and `failure_reasons`). 1 means a check failed or a precondition aborted the run; 2 means the token was missing or would have leaked. A failed live call is never retried, stops the live phase and fails the run; semantic answer quality and citation support remain a manual judgment. Uploads use the fixture manifest of `scripts/measure_real_profile.py`: `attention-is-all-you-need.pdf` from https://arxiv.org/pdf/1706.03762 (SHA-256 `bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697`, 15 pages, 97 chunks) and `retrieval-augmented-generation.pdf` from https://arxiv.org/pdf/2005.11401 (SHA-256 `23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233`, 19 pages, 171 chunks). A digest mismatch aborts before any upload. The control behavior (no generation call without `--live`, the cap, no retry, token handling, digest refusal, ledger comparison) is covered by `tests/test_verify_live_demo.py` against a fake server; no credential is used in tests.
+Each run writes `stage3-evidence/stage3-evidence-<UTC>.json` (every response, request ids, ledger snapshots before and after each call) and a `.md` rendering. Exit code 0 means every recorded check passed: the safe checks including declared page/chunk counts of the uploads, the ledger comparison when requested (evaluated on the first `/ready` snapshot, before any upload or paid call), and with `--live` every call answered 200 from the configured model with `measured` usage that the ledger delta confirms (`checks.live_phase_passed`, per-call `accounted` and `failure_reasons`). 1 means a check failed or a precondition aborted the run; 2 means the token was missing or would have leaked. A failed live call is never retried, stops the live phase and fails the run; semantic answer quality and citation support remain a manual judgment. Uploads use the fixture manifest of `scripts/measure_real_profile.py`: `attention-is-all-you-need.pdf` from https://arxiv.org/pdf/1706.03762 (SHA-256 `bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697`, 15 pages, 110 chunks) and `retrieval-augmented-generation.pdf` from https://arxiv.org/pdf/2005.11401 (SHA-256 `23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233`, 19 pages, 188 chunks). A digest mismatch aborts before any upload. The control behavior (no generation call without `--live`, the cap, no retry, token handling, digest refusal, ledger comparison) is covered by `tests/test_verify_live_demo.py` against a fake server; no credential is used in tests.
 
 ## Evidence rubric
 
@@ -101,15 +101,17 @@ Known limitations to state with the evidence: three questions are a demonstratio
 
 1. Safe run, then live run as above. Keep the JSON of the last run (call it A) and note `ledger_created_at`, `calls_total` and `tokens_charged_total` from its `ready_final`.
 2. In Render: Manual Deploy → Restart service. Render documents a restart as a manual deploy of the same commit and configuration; because a disk is attached the running instance is stopped before the new one starts, so expect a short outage rather than a zero-downtime swap.
-3. When `/ready` is 200 again, run the helper with the comparison and without uploads:
+3. When `/ready` is 200 again, run the normal safe run with the comparison (uploads included; the comparison is evaluated on the first `/ready` snapshot, before any upload):
 
    ```sh
    python scripts/verify_live_demo.py --base-url https://research-paper-rag-api.onrender.com \
-     --output stage3-evidence --skip-uploads --compare-ledger stage3-evidence/<A>.json
+     --output stage3-evidence --fixture-dir stage3-fixtures --compare-ledger stage3-evidence/<A>.json
    ```
 
-   Expected: `checks.ledger_persisted: true` (same `ledger_created_at`, counts not lower), and `papers_before` is `[]` because the corpus is disposable. A different `ledger_created_at` means a fresh ledger was created somewhere else (wrong path, wrong mount, or the disk was not attached) and the budget history was lost; stop and investigate before any further paid call.
-4. Re-upload with the safe run (no `--skip-uploads`); both papers must ingest with 97 and 171 chunks again. Optionally one more live call, then a final `/ready` showing counts that only grew.
+   Expected: `checks.ledger_persisted: true` (same `ledger_created_at`, counts not lower), `papers_before` is `[]` because the corpus is disposable, both papers ingest again with 110 and 188 chunks, and every check passes. Do not use `--skip-uploads` for this step: on the empty corpus after a restart the abstention query is correctly refused with `400 empty_corpus`, so that variant exits 1 on `abstention_not_invoked` even though `ledger_persisted` is `true`. A different `ledger_created_at` means a fresh ledger was created somewhere else (wrong path, wrong mount, or the disk was not attached) and the budget history was lost; stop and investigate before any further paid call.
+4. Optionally one more live call, then a final `/ready` showing counts that only grew.
+
+Observed on the deployed `main` `1d49927` service: the Render restart kept the ledger identity (same `ledger_created_at`, 3 calls, 2487 tokens, zero unsettled) and cleared the corpus, as designed.
 
 ## Rollback and disable, and what is not assumed
 
@@ -122,3 +124,25 @@ Known limitations to state with the evidence: three questions are a demonstratio
 ## Evidence status
 
 Filled in by the operator from actual runs. Until then Stage 3 is prepared, not complete: no live answer, citation or restart claim is made here.
+
+## Retrieval defect found by the live verification, and the extraction fix
+
+Live evidence at `main` `1d49927` (kept as recorded): three accounted `gpt-4o-mini` calls; all 15 citation previews matched their source chunks, pages and hashes exactly, so the defect is retrieval and entailment, not page coordinates; the attention-scaling question was answered correctly from page 4, but "What distinguishes RAG-Sequence from RAG-Token in how retrieved documents are used?" retrieved pages 17, 8, 7, 17, 1 (never page 3, where Section 2.1 defines both) and the answer was reversed, and the retriever/generator question retrieved pages 1, 5, 3, 7, 9 and answered generically. Citation previews showed run-together words such as `memoryisapre-trainedseq2seqmodel`.
+
+Diagnosis (offline, `docs/evidence/stage3-retrieval-offline.json`): pdfplumber's `extract_text()` groups characters into words with a fixed 3 pt tolerance. Both fixtures are pdfTeX output that positions words by offset without space glyphs, and their 10 pt body text has an inter-word gap of about 2.5 pt, so nearly every line was extracted as one word: 750 tokens longer than 25 characters in the RAG paper and 407 in the Transformer paper, against 74 and 1 from pypdf on the same pages. The embeddings were computed on that noise. Rebuilding the index offline with the deployed extraction reproduces the live pages exactly (17, 8, 7, 17, 1 and 1, 5, 3, 7, 9).
+
+Fix (`app/rag_engine.py`, `WORD_GAP_RATIO = 0.15`): pdfplumber's `x_tolerance_ratio` scales the word tolerance with the glyph size, 1.5 pt at 10 pt. Kerning gaps inside a word are near 0 em and the narrowest justified inter-word gap of a Times-style font is about 0.17 em, so 0.15 em separates words without splitting them; on the fixtures it leaves 73 and 1 long tokens (the remainder are bibliography lines that pypdf joins the same way). No dependency, provider or protection changed; the pypdf fallback is untouched. `tests/test_pdf_word_spacing.py` reproduces the layout with reportlab (words drawn 2.5 pt apart with no space glyphs), shows the default tolerance joining them, and checks the engine keeps the boundaries while a tightly kerned word stays whole.
+
+Expected chunk counts change because the corrected text is longer: Attention Is All You Need 97 → 110 chunks, Retrieval-Augmented Generation 171 → 188 chunks (pages unchanged, 15 and 19; both far inside the 600-per-paper and 3000-total ceilings). The fixture manifests in `scripts/measure_real_profile.py` and `scripts/verify_live_demo.py` carry the new counts.
+
+Offline retrieval, top-5 pages before → after (same model, same chunker, k = 5):
+
+| Question | Before | After | Expected page(s) |
+|---|---|---|---|
+| RAG-Sequence vs RAG-Token | 17, 8, 7, 17, 1 (top score 0.46) | 8, 7, **3**, 8, **3** (0.58) | 3 |
+| Retriever and generator models | 1, 5, **3**, 7, 9 (0.38) | 6, 7, 10, 17, 9 (0.41); page 2 at rank 6, page 3 at ranks 9 and 11 | 2, 3 |
+| Attention scaling | 4, 4, 4, 11, 2 | 4, 4, 1, 4, 4 | 4 |
+| Encoder layers | 3, 3, 1, 3, 5 | 3, 3, 3, 5, 5 | 3 |
+| Big-model BLEU on WMT14 En-De | 10, 1, 1, 8, 9 | 8, 1, 8, 8, 9 | 1, 8 |
+
+Honest limits: the fix removes the root cause and brings page 3 into the context for the RAG-Sequence/Token question, but it does not make every question retrieve its best page. The retriever/generator question still misses because the Section 2.2/2.3 chunks mix the "DPR"/"BART" sentences with formula fragments and `(cid:NN)` glyph artifacts under the fixed 500-character chunking; a paragraph-aware chunker or artifact stripping is a separate, larger change and was not attempted here. No relevance threshold for abstention was added: the offline top scores of wrong and right pages overlap (0.41 versus 0.44), so a threshold would need calibration on more questions. Answer quality after the fix is not verified until the operator re-runs the live rubric; a redeploy is recommended only after the real-profile CI shows the new chunk counts.

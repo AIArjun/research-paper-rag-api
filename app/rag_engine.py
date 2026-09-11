@@ -36,6 +36,14 @@ from app.diagnostics import log_safe_error
 from app.ledger import BudgetExhaustedError, LedgerError, ModelCallLedger
 from app.tokens import TokenBound, TokenBoundError, token_bound_for
 
+# Word boundary tolerance for pdfplumber as a fraction of the glyph size.
+# Its fixed default (3 pt) is wider than the inter-word gap of common 10 pt
+# body fonts (about 2.5 pt) in PDFs that position words without space glyphs,
+# such as pdfTeX output, so whole lines were extracted as one run-together
+# word and embedded as noise. 0.15 em sits between kerning gaps inside a word
+# (near 0) and the narrowest justified inter-word gap (about 0.17 em).
+WORD_GAP_RATIO = 0.15
+
 logger = logging.getLogger("rag-api.engine")
 
 __all__ = [
@@ -358,7 +366,7 @@ class RAGEngine:
                 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                     self._check_page_count(len(pdf.pages), max_pages)
                     for i, page in enumerate(pdf.pages):
-                        text = page.extract_text() or ""
+                        text = page.extract_text(x_tolerance_ratio=WORD_GAP_RATIO) or ""
                         if text.strip():
                             pages.append({"page": i + 1, "text": text.strip()})
                 return pages
