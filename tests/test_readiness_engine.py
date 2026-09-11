@@ -59,12 +59,18 @@ def fake_modules(monkeypatch):
 
 
 @pytest.fixture
-def real_configuration(monkeypatch):
+def real_configuration(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "LLM_PROVIDER", "openai")
     monkeypatch.setattr(settings, "LLM_MODEL", "fake-test-model")
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "not-a-real-key")
     monkeypatch.setattr(settings, "CHUNK_SIZE", 500)
     monkeypatch.setattr(settings, "CHUNK_OVERLAP", 100)
+    # Real generation is disabled until accounting is explicit; tests use a temporary ledger.
+    monkeypatch.setattr(settings, "MODEL_CALL_LEDGER_PATH", str(tmp_path / "ledger.sqlite3"))
+    monkeypatch.setattr(settings, "MAX_MODEL_CALLS_PER_DAY", 10)
+    monkeypatch.setattr(settings, "MAX_MODEL_CALLS_TOTAL", 10)
+    monkeypatch.setattr(settings, "MAX_MODEL_TOKENS_PER_DAY", 100000)
+    monkeypatch.setattr(settings, "MAX_MODEL_TOKENS_TOTAL", 100000)
 
 
 @pytest.mark.parametrize(

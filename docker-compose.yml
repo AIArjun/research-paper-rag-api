@@ -13,6 +13,15 @@ services:
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
       - EMBEDDING_MODEL=all-MiniLM-L6-v2
       - LOG_LEVEL=INFO
+      # Protected demo: set DEMO_ACCESS_TOKEN in your shell or .env; protected routes return 503 without it.
+      - DEMO_ACCESS_TOKEN=${DEMO_ACCESS_TOKEN:-}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
+      # Model-call accounting (real providers only); keep the ledger on the mounted volume.
+      - MODEL_CALL_LEDGER_PATH=${MODEL_CALL_LEDGER_PATH:-}
+      - MAX_MODEL_CALLS_PER_DAY=${MAX_MODEL_CALLS_PER_DAY:-0}
+      - MAX_MODEL_CALLS_TOTAL=${MAX_MODEL_CALLS_TOTAL:-0}
+      - MAX_MODEL_TOKENS_PER_DAY=${MAX_MODEL_TOKENS_PER_DAY:-0}
+      - MAX_MODEL_TOKENS_TOTAL=${MAX_MODEL_TOKENS_TOTAL:-0}
     volumes:
       - ./vectorstore:/app/vectorstore
       - ./uploads:/app/uploads

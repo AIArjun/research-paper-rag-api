@@ -6,6 +6,7 @@ import pytest
 import app.main as api
 from app.config import settings
 from app.rag_engine import RAGEngine, GenerationError
+from tests.conftest import AUTH_HEADERS
 
 
 @pytest.fixture
@@ -13,7 +14,7 @@ def client(monkeypatch):
     monkeypatch.setattr(settings, "LLM_PROVIDER", "demo")
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "")
     monkeypatch.setattr(api, "rag", RAGEngine())
-    return TestClient(api.app)
+    return TestClient(api.app, headers=AUTH_HEADERS)
 
 
 def test_demo_health_reports_effective_modes(client):

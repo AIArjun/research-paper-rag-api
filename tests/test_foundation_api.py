@@ -5,11 +5,12 @@ from fastapi.testclient import TestClient
 
 from app.main import app, rag
 from app.rag_engine import StorageMutationError
+from tests.conftest import AUTH_HEADERS
 
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    return TestClient(app, headers=AUTH_HEADERS)
 
 
 def test_duplicate_upload_returns_canonical_filename(client, monkeypatch):

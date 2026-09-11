@@ -9,6 +9,15 @@ Supports:
 - Ollama (llama3, mistral) for local/free inference
 - Demo mode (no API key needed) for testing
 
+Bounds (Stage 2c): page, chunk, paper and corpus ceilings are checked before
+embeddings or storage; every real-model call is reserved in a persistent
+ledger before the provider is contacted; prompts are capped in size.
+
+Locking: `_state_lock` guards the process-local registry and is only held
+briefly, so readiness stays responsive. `_work_lock` serializes extraction,
+indexing, deletion and retrieval, and is only held inside worker threads.
+Order: work lock, then state lock. Provider calls hold neither.
+
 Author: Arjun Ponnaganti
 """
 
@@ -22,8 +31,14 @@ from typing import Optional
 
 from app.config import settings
 from app.diagnostics import log_safe_error
+from app.ledger import BudgetExhaustedError, LedgerError, ModelCallLedger
 
 logger = logging.getLogger("rag-api.engine")
+
+__all__ = [
+    "RAGEngine", "StorageMutationError", "BackendUnavailableError", "GenerationError",
+    "LimitExceededError", "PDFExtractionError", "BudgetExhaustedError", "LedgerError",
+]
 
 
 class StorageMutationError(RuntimeError):
@@ -47,6 +62,63 @@ class GenerationError(RuntimeError):
     """A configured model failed to produce an answer; never a demo fallback."""
 
 
+class LimitExceededError(RuntimeError):
+    """A configured ceiling would be exceeded; nothing was stored or generated."""
+
+    def __init__(self, category: str, limit: int, observed: Optional[int] = None):
+        super().__init__(f"Limit exceeded: {category}")
+        self.category = category
+        self.limit = limit
+        self.observed = observed
+
+
+class PDFExtractionError(ValueError):
+    """The upload could not be parsed as a text PDF; details stay out of responses."""
+
+
+def _safe_attribute(value: object, name: str) -> object:
+    try:
+        return getattr(value, name, None)
+    except Exception:
+        return None
+
+
+def _estimate_tokens(text: str) -> int:
+    """Conservative reservation heuristic (about 3 characters per token); not a measurement."""
+    return len(text) // 3 + 1
+
+
+def _measured_usage(response: object) -> tuple[Optional[int], Optional[int]]:
+    """Read provider-reported token counts when present; never inspect anything else."""
+    usage = _safe_attribute(response, "usage_metadata")
+    if not isinstance(usage, dict):
+        return None, None
+    input_tokens = usage.get("input_tokens")
+    output_tokens = usage.get("output_tokens")
+    if type(input_tokens) is int and type(output_tokens) is int and input_tokens >= 0 and output_tokens >= 0:
+        return input_tokens, output_tokens
+    return None, None
+
+
+def _response_text(response: object) -> str:
+    """Extract answer text from a string, a chat message or text content blocks."""
+    if isinstance(response, str):
+        return response
+    content = _safe_attribute(response, "content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        if parts:
+            return "".join(parts)
+    raise GenerationError("The configured model returned an unsupported response type.")
+
+
 class RAGEngine:
     """
     Retrieval-Augmented Generation engine for research papers.
@@ -66,13 +138,15 @@ class RAGEngine:
         # This guard is process-local; durable recovery is a separate milestone.
         self._pending_cleanup: dict[str, list[str]] = {}
         self._pending_metadata: dict[str, dict] = {}
-        self._mutation_lock = RLock()
+        self._state_lock = RLock()
+        self._work_lock = RLock()
         self._configured_provider = settings.LLM_PROVIDER
         self._configured_model = settings.LLM_MODEL
         self._init_error: Optional[str] = None
         self._vectorstore = None
         self._embeddings = None
         self._llm = None
+        self._ledger: Optional[ModelCallLedger] = None
         self._initialize()
 
     def _initialize(self):
@@ -80,6 +154,7 @@ class RAGEngine:
         self._embeddings = None
         self._vectorstore = None
         self._llm = None
+        self._ledger = None
         self._init_error = None
         try:
             settings.validate()
@@ -94,6 +169,19 @@ class RAGEngine:
         if self._configured_provider == "openai" and not settings.OPENAI_API_KEY.strip():
             self._init_error = "missing_api_key"
             log_safe_error(logger, self._init_error)
+            return
+
+        # Paid inference stays disabled until allowances and a ledger path are explicit.
+        allowances = settings.budget_allowances()
+        if allowances is None:
+            self._init_error = "budget_not_configured"
+            log_safe_error(logger, self._init_error)
+            return
+        try:
+            self._ledger = ModelCallLedger(settings.MODEL_CALL_LEDGER_PATH, allowances)
+        except LedgerError as error:
+            self._init_error = "ledger_unavailable"
+            log_safe_error(logger, self._init_error, error.__cause__ or error)
             return
 
         failure_category = "embedding_initialization_failed"
@@ -127,10 +215,18 @@ class RAGEngine:
             self._embeddings = None
             self._vectorstore = None
             self._llm = None
+            self._ledger = None
             log_safe_error(logger, self._init_error, initialization_error)
 
     def _init_llm(self):
-        """Construct a client; this does not verify remote credentials/connectivity."""
+        """Construct a bounded client; this does not verify remote credentials/connectivity.
+
+        Every supported provider receives an explicit timeout and output cap and
+        performs no automatic retries. A provider that cannot accept these bounds
+        fails construction and is reported as model_initialization_failed.
+        """
+        timeout = settings.LLM_TIMEOUT_SECONDS
+        max_output_tokens = settings.LLM_MAX_OUTPUT_TOKENS
         if self._configured_provider == "openai":
             from langchain_openai import ChatOpenAI
 
@@ -138,6 +234,9 @@ class RAGEngine:
                 model=self._configured_model,
                 temperature=0.1,
                 api_key=settings.OPENAI_API_KEY,
+                timeout=timeout,
+                max_retries=0,
+                max_tokens=max_output_tokens,
             )
         elif self._configured_provider == "ollama":
             from langchain_ollama import OllamaLLM
@@ -146,18 +245,25 @@ class RAGEngine:
                 model=self._configured_model,
                 base_url=settings.OLLAMA_URL,
                 validate_model_on_init=False,
+                num_predict=max_output_tokens,
+                client_kwargs={"timeout": timeout},
             )
+        else:
+            raise BackendUnavailableError("invalid_configuration")
 
     def get_readiness(self) -> dict:
         """Cheap local pipeline state; no model request, storage read or network probe."""
-        with self._mutation_lock:
+        with self._state_lock:
             real = isinstance(self._configured_provider, str) and self._configured_provider in {"openai", "ollama"}
             vector_ready = self._vectorstore is not None and self._embeddings is not None
             if self._init_error is not None:
                 retrieval, generation = "unavailable", "unavailable"
             elif real:
                 retrieval = "chroma" if vector_ready else "unavailable"
-                generation = self._configured_provider if self._llm is not None else "unavailable"
+                generation = (
+                    self._configured_provider
+                    if self._llm is not None and self._ledger is not None else "unavailable"
+                )
             else:
                 retrieval = "chroma" if vector_ready else "memory-keyword"
                 generation = "demo"
@@ -180,39 +286,79 @@ class RAGEngine:
                 "provider_connection_verified": False,
             }
 
+    def get_budget_status(self) -> dict:
+        """Model-call accounting state: counts only, never prompts or paths.
+
+        Unlike get_readiness() this reads the local ledger file (read-only), so
+        the API calls it from a worker thread. A ledger that became unusable
+        after startup is reported as "unavailable" and makes the API unready.
+        """
+        with self._state_lock:
+            provider = self._configured_provider
+            ledger = self._ledger
+            init_error = self._init_error
+        status = {"state": "not_applicable", "configured": False, "usage": None}
+        if not (isinstance(provider, str) and provider in {"openai", "ollama"}):
+            return status
+        if ledger is None:
+            status["state"] = "not_configured" if init_error in (None, "budget_not_configured") else "unavailable"
+            return status
+        status["configured"] = True
+        try:
+            status["usage"] = ledger.summary()
+            status["state"] = "ok"
+        except LedgerError as error:
+            log_safe_error(logger, "ledger_unavailable", error.__cause__ or error)
+            status["state"] = "unavailable"
+        return status
+
     def assert_backend_ready(self) -> None:
         """Fail closed for an invalid or incomplete requested real pipeline."""
-        with self._mutation_lock:
+        with self._state_lock:
             if self._init_error is not None:
                 raise BackendUnavailableError(self._init_error)
-            if self._configured_provider in {"openai", "ollama"} and (
-                self._vectorstore is None or self._embeddings is None or self._llm is None
-            ):
-                raise BackendUnavailableError()
+            if self._configured_provider in {"openai", "ollama"}:
+                if self._vectorstore is None or self._embeddings is None or self._llm is None:
+                    raise BackendUnavailableError()
+                if self._ledger is None:
+                    raise BackendUnavailableError("budget_not_configured")
 
     def _extract_pdf(self, pdf_bytes: bytes) -> list[dict]:
-        """Extract text from PDF, page by page."""
+        """Extract text from PDF, page by page, after checking the page ceiling."""
+        max_pages = settings.resource_limits().max_pdf_pages
         try:
-            import pdfplumber
+            try:
+                import pdfplumber
 
-            pages = []
-            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-                for i, page in enumerate(pdf.pages):
+                pages = []
+                with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                    self._check_page_count(len(pdf.pages), max_pages)
+                    for i, page in enumerate(pdf.pages):
+                        text = page.extract_text() or ""
+                        if text.strip():
+                            pages.append({"page": i + 1, "text": text.strip()})
+                return pages
+            except ImportError:
+                # Fallback to pypdf
+                from pypdf import PdfReader
+
+                reader = PdfReader(io.BytesIO(pdf_bytes))
+                self._check_page_count(len(reader.pages), max_pages)
+                pages = []
+                for i, page in enumerate(reader.pages):
                     text = page.extract_text() or ""
                     if text.strip():
                         pages.append({"page": i + 1, "text": text.strip()})
-            return pages
-        except ImportError:
-            # Fallback to pypdf
-            from pypdf import PdfReader
+                return pages
+        except (LimitExceededError, MemoryError):
+            raise
+        except Exception as error:
+            raise PDFExtractionError("The PDF could not be parsed.") from error
 
-            reader = PdfReader(io.BytesIO(pdf_bytes))
-            pages = []
-            for i, page in enumerate(reader.pages):
-                text = page.extract_text() or ""
-                if text.strip():
-                    pages.append({"page": i + 1, "text": text.strip()})
-            return pages
+    @staticmethod
+    def _check_page_count(page_count: int, max_pages: Optional[int]) -> None:
+        if max_pages is not None and page_count > max_pages:
+            raise LimitExceededError("too_many_pages", max_pages, page_count)
 
     def _chunk_text(
         self,
@@ -263,37 +409,61 @@ class RAGEngine:
 
         return chunks
 
+    # ─── Capacity accounting (state lock held by callers) ───
+
+    def _occupied_paper_count(self) -> int:
+        return len(set(self.papers) | set(self._pending_cleanup))
+
+    def _occupied_chunk_count(self) -> int:
+        ready = sum(paper["chunks"] for paper in self.papers.values())
+        pending = sum(
+            len(ids) for paper_id, ids in self._pending_cleanup.items() if paper_id not in self.papers
+        )
+        return ready + pending
+
     def ingest_paper(self, pdf_bytes: bytes, filename: str) -> dict:
         """
         Process and index a research paper.
 
         Identical bytes are idempotent within the loaded registry: retain the
-        original filename, upload time and chunks without indexing again.
+        original filename, upload time and chunks without indexing again, even
+        when the corpus is at capacity.
 
         Returns:
             dict with paper_id, canonical filename, pages count, chunks count
         """
-        with self._mutation_lock:
+        with self._work_lock:
             self.assert_backend_ready()
             return self._ingest_paper(pdf_bytes, filename)
 
     def _ingest_paper(self, pdf_bytes: bytes, filename: str) -> dict:
+        limits = settings.resource_limits()
         paper_id = hashlib.sha256(pdf_bytes).hexdigest()
-        if paper_id in self._pending_cleanup:
-            raise StorageMutationError(
-                f"Paper '{paper_id}' needs storage cleanup; retry deletion before uploading.",
-                paper_id=paper_id,
-            )
-        if paper_id in self.papers:
-            paper = self.papers[paper_id]
-            return {
-                "paper_id": paper_id,
-                "filename": paper["filename"],
-                "pages": paper["pages"],
-                "chunks": paper["chunks"],
-            }
+        with self._state_lock:
+            if paper_id in self._pending_cleanup:
+                raise StorageMutationError(
+                    f"Paper '{paper_id}' needs storage cleanup; retry deletion before uploading.",
+                    paper_id=paper_id,
+                )
+            if paper_id in self.papers:
+                paper = self.papers[paper_id]
+                return {
+                    "paper_id": paper_id,
+                    "filename": paper["filename"],
+                    "pages": paper["pages"],
+                    "chunks": paper["chunks"],
+                }
+            # Cheap ceilings first: no parsing for a corpus that cannot accept a paper.
+            if len(pdf_bytes) > limits.max_file_bytes:
+                raise LimitExceededError("file_too_large", limits.max_file_bytes, len(pdf_bytes))
+            occupied_papers = self._occupied_paper_count()
+            if occupied_papers >= limits.max_papers:
+                raise LimitExceededError("paper_limit_reached", limits.max_papers, occupied_papers)
+            occupied_chunks = self._occupied_chunk_count()
+            if occupied_chunks >= limits.max_total_chunks:
+                raise LimitExceededError("corpus_capacity_reached", limits.max_total_chunks, occupied_chunks)
 
-        # Extract text
+        # Extract text (page ceiling is checked before any page is read)
         pages = self._extract_pdf(pdf_bytes)
         if not pages:
             raise ValueError("Could not extract text from PDF. Is it scanned/image-based?")
@@ -306,6 +476,20 @@ class RAGEngine:
         )
         if not chunks:
             raise ValueError("Could not extract non-empty text chunks from PDF.")
+        if len(chunks) > limits.max_chunks_per_paper:
+            raise LimitExceededError("too_many_chunks", limits.max_chunks_per_paper, len(chunks))
+
+        # Corpus capacity is checked and consumed under the same work lock that
+        # serializes every mutation, so two uploads cannot both take the last room.
+        with self._state_lock:
+            occupied_papers = self._occupied_paper_count()
+            if occupied_papers >= limits.max_papers:
+                raise LimitExceededError("paper_limit_reached", limits.max_papers, occupied_papers)
+            occupied_chunks = self._occupied_chunk_count()
+            if occupied_chunks + len(chunks) > limits.max_total_chunks:
+                raise LimitExceededError(
+                    "corpus_capacity_reached", limits.max_total_chunks, occupied_chunks + len(chunks)
+                )
 
         # Publish this record only after the storage operation succeeds.
         paper = {
@@ -336,8 +520,9 @@ class RAGEngine:
                 try:
                     self._vectorstore.delete(ids=ids)
                 except Exception:
-                    self._pending_cleanup[paper_id] = ids
-                    self._pending_metadata[paper_id] = paper.copy()
+                    with self._state_lock:
+                        self._pending_cleanup[paper_id] = ids
+                        self._pending_metadata[paper_id] = paper.copy()
                     raise StorageMutationError(
                         f"Indexing and rollback failed for paper '{paper_id}'. "
                         "Corpus queries are blocked until deletion is retried successfully.",
@@ -348,17 +533,20 @@ class RAGEngine:
                     paper_id=paper_id,
                     cleanup_required=False,
                 ) from error
-            logger.info(f"Added {len(chunks)} chunks to vector store for '{filename}'")
+            logger.info("Added %d chunks to the vector store for paper %s", len(chunks), paper_id[:12])
+            with self._state_lock:
+                self.papers[paper_id] = paper
         else:
             # Demo mode: store chunks in memory
             for i, c in enumerate(chunks):
                 c["paper_id"] = paper_id
                 c["filename"] = filename
                 c["chunk_id"] = f"{paper_id}-{i}"
-            self.chunks_store.extend(chunks)
-            logger.info(f"Demo mode: stored {len(chunks)} chunks in memory")
+            with self._state_lock:
+                self.chunks_store.extend(chunks)
+                self.papers[paper_id] = paper
+            logger.info("Demo mode: stored %d chunks in memory for paper %s", len(chunks), paper_id[:12])
 
-        self.papers[paper_id] = paper
         return {
             "paper_id": paper_id,
             "filename": paper["filename"],
@@ -368,7 +556,7 @@ class RAGEngine:
 
     def assert_storage_ready(self) -> None:
         """Reject access to a corpus whose last mutation needs explicit cleanup."""
-        with self._mutation_lock:
+        with self._state_lock:
             if self._pending_cleanup:
                 raise StorageMutationError(
                     "Corpus queries are blocked by an incomplete storage mutation. "
@@ -381,17 +569,27 @@ class RAGEngine:
         question: str,
         paper_id: Optional[str] = None,
         top_k: int = 5,
+        request_id: Optional[str] = None,
     ) -> dict:
         """
         Query the knowledge base with a question.
 
         Returns:
-            dict with answer, citations, timing, and model info
+            dict with answer, citations, timing, model info and model usage
         """
+        limits = settings.resource_limits()
+        if not isinstance(question, str):
+            raise ValueError("The question must be a string.")
+        if len(question) > limits.max_question_chars:
+            raise LimitExceededError("question_too_long", limits.max_question_chars, len(question))
+        if type(top_k) is not int or top_k < 1:
+            raise ValueError("top_k must be a positive integer.")
+        top_k = min(top_k, limits.max_top_k)
+
         # ─── Retrieval ───
         retrieval_start = time.time()
 
-        with self._mutation_lock:
+        with self._work_lock:
             self.assert_storage_ready()
             self.assert_backend_ready()
             if self._vectorstore is not None:
@@ -427,27 +625,12 @@ class RAGEngine:
 
         # ─── Generation ───
         gen_start = time.time()
+        model_usage = None
 
         if self._llm is not None and citations:
-            context = "\n\n".join(
-                f"[Source: {c['paper']}, Page {c.get('page', '?')}]\n{c['text']}"
-                for c in passages
+            answer, model_used, model_usage = self._generate_bounded(
+                question, passages, limits.max_context_chars, request_id
             )
-            prompt = (
-                "You are a research assistant. Answer the question based ONLY on the "
-                "provided context. Cite the source paper and page number for each claim. "
-                "If the context doesn't contain enough information, say so.\n\n"
-                f"Context:\n{context}\n\n"
-                f"Question: {question}\n\n"
-                "Answer:"
-            )
-            try:
-                response = self._llm.invoke(prompt)
-                answer = response.content if hasattr(response, "content") else str(response)
-                model_used = self._configured_model
-            except Exception as e:
-                log_safe_error(logger, "generation_failed", e)
-                raise GenerationError("The configured model failed to generate an answer.") from e
         elif not citations:
             answer = "The retrieved sources contain insufficient evidence to answer this question."
             model_used = "not-invoked"
@@ -464,7 +647,85 @@ class RAGEngine:
             "retrieval_time_ms": retrieval_time,
             "generation_time_ms": gen_time,
             "model_used": model_used,
+            "model_usage": model_usage,
         }
+
+    @staticmethod
+    def _build_context(passages: list[dict], max_chars: int) -> str:
+        """Join full passages in rank order until the context ceiling is reached."""
+        blocks = []
+        used = 0
+        for passage in passages:
+            block = f"[Source: {passage['paper']}, Page {passage.get('page', '?')}]\n{passage['text']}"
+            separator = 2 if blocks else 0
+            if used + separator + len(block) > max_chars:
+                if not blocks:
+                    blocks.append(block[:max_chars])
+                break
+            blocks.append(block)
+            used += separator + len(block)
+        return "\n\n".join(blocks)
+
+    def _generate_bounded(
+        self, question: str, passages: list[dict], max_context_chars: int, request_id: Optional[str]
+    ) -> tuple[str, str, dict]:
+        """Reserve an attempted call in the ledger, then invoke the bounded client once."""
+        with self._state_lock:
+            ledger = self._ledger
+            llm = self._llm
+            provider = self._configured_provider
+            model = self._configured_model
+        if ledger is None:
+            # Never call a model whose usage cannot be accounted for.
+            raise BackendUnavailableError("budget_not_configured")
+        context = self._build_context(passages, max_context_chars)
+        prompt = (
+            "You are a research assistant. Answer the question based ONLY on the "
+            "provided context. Cite the source paper and page number for each claim. "
+            "If the context doesn't contain enough information, say so.\n\n"
+            f"Context:\n{context}\n\n"
+            f"Question: {question}\n\n"
+            "Answer:"
+        )
+        max_output_tokens = settings.LLM_MAX_OUTPUT_TOKENS
+        if type(max_output_tokens) is not int or max_output_tokens < 1:
+            raise BackendUnavailableError("invalid_configuration")
+        reserved_tokens = _estimate_tokens(prompt) + max_output_tokens
+        # The reservation counts even if the provider fails, times out or hangs.
+        call_id = ledger.reserve(str(provider), str(model), reserved_tokens, request_id)
+        try:
+            response = llm.invoke(prompt)
+        except Exception as error:
+            self._settle(ledger, call_id, "failed")
+            log_safe_error(logger, "generation_failed", error)
+            raise GenerationError("The configured model failed to generate an answer.") from error
+        try:
+            answer = _response_text(response)
+        except GenerationError:
+            self._settle(ledger, call_id, "failed")
+            raise
+        input_tokens, output_tokens = _measured_usage(response)
+        self._settle(ledger, call_id, "succeeded", input_tokens, output_tokens)
+        measured = input_tokens is not None
+        model_usage = {
+            "accounting": "measured" if measured else "reserved",
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "tokens_charged": (input_tokens + output_tokens) if measured and (input_tokens + output_tokens) > 0
+            else reserved_tokens,
+            "tokens_reserved": reserved_tokens,
+            "context_chars": len(context),
+        }
+        return answer, str(model), model_usage
+
+    @staticmethod
+    def _settle(ledger: ModelCallLedger, call_id: int, status: str,
+                input_tokens: Optional[int] = None, output_tokens: Optional[int] = None) -> None:
+        """A settlement failure leaves the conservative reservation in place."""
+        try:
+            ledger.settle(call_id, status, input_tokens, output_tokens)
+        except LedgerError as error:
+            log_safe_error(logger, "ledger_unavailable", error.__cause__ or error)
 
     def _demo_retrieve(
         self,
@@ -475,8 +736,10 @@ class RAGEngine:
         """Simple keyword-based retrieval for demo mode."""
         question_words = set(question.lower().split())
         scored = []
+        with self._state_lock:
+            snapshot = list(self.chunks_store)
 
-        for chunk in self.chunks_store:
+        for chunk in snapshot:
             if paper_id and chunk.get("paper_id") != paper_id:
                 continue
             chunk_words = set(chunk["text"].lower().split())
@@ -522,7 +785,7 @@ class RAGEngine:
 
     def list_papers(self, include_pending: bool = False) -> list[dict]:
         """List ready papers; optionally expose recoverable pending mutations with status."""
-        with self._mutation_lock:
+        with self._state_lock:
             if not include_pending:
                 return [
                     paper.copy() for paper_id, paper in self.papers.items()
@@ -544,24 +807,26 @@ class RAGEngine:
 
     def delete_paper(self, paper_id: str) -> bool:
         """Remove a paper and its chunks from the knowledge base."""
-        with self._mutation_lock:
+        with self._work_lock:
             return self._delete_paper(paper_id)
 
     def _delete_paper(self, paper_id: str) -> bool:
-        if paper_id not in self.papers and paper_id not in self._pending_cleanup:
-            return False
-
-        if self._vectorstore is not None:
-            # Delete from ChromaDB
+        with self._state_lock:
+            if paper_id not in self.papers and paper_id not in self._pending_cleanup:
+                return False
             ids_to_delete = self._pending_cleanup.get(paper_id)
-            if ids_to_delete is None:
+            if ids_to_delete is None and paper_id in self.papers:
                 ids_to_delete = [
                     f"{paper_id}-{i}" for i in range(self.papers[paper_id]["chunks"])
                 ]
+
+        if self._vectorstore is not None:
+            # Delete from ChromaDB
             try:
                 self._vectorstore.delete(ids=ids_to_delete)
             except Exception as e:
-                self._pending_cleanup[paper_id] = ids_to_delete
+                with self._state_lock:
+                    self._pending_cleanup[paper_id] = ids_to_delete
                 raise StorageMutationError(
                     f"Deletion failed for paper '{paper_id}'. "
                     "Corpus queries are blocked until deletion is retried successfully.",
@@ -574,13 +839,14 @@ class RAGEngine:
             )
 
         # Remove from memory
-        self.chunks_store = [
-            c for c in self.chunks_store if c.get("paper_id") != paper_id
-        ]
-        self.papers.pop(paper_id, None)
-        self._pending_cleanup.pop(paper_id, None)
-        self._pending_metadata.pop(paper_id, None)
-        logger.info(f"Deleted paper: {paper_id}")
+        with self._state_lock:
+            self.chunks_store = [
+                c for c in self.chunks_store if c.get("paper_id") != paper_id
+            ]
+            self.papers.pop(paper_id, None)
+            self._pending_cleanup.pop(paper_id, None)
+            self._pending_metadata.pop(paper_id, None)
+        logger.info("Deleted paper %s", paper_id[:12] if isinstance(paper_id, str) else "unknown")
         return True
 
     def get_stats(self) -> dict:
