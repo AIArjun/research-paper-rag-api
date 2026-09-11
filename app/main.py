@@ -217,6 +217,7 @@ class ModelBudgetStatus(BaseModel):
     state: str = "not_applicable"
     configured: bool = False
     usage: Optional[dict] = None
+    token_bound: Optional[str] = None  # e.g. "tiktoken/o200k_base"; None when generation is unavailable
 
 
 class HealthResponse(BaseModel):

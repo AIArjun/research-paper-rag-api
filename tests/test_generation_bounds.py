@@ -432,6 +432,7 @@ def test_readiness_reports_budget_state_without_secrets_or_paths(client, monkeyp
     assert ready.status_code == 200, ready.text
     budget = ready.json()["model_budget"]
     assert budget["state"] == "ok" and budget["configured"] is True
+    assert budget["token_bound"] == "tiktoken/fake_base"  # the measurement asserts this key offline
     assert budget["usage"]["calls_total"] == 0 and budget["usage"]["total_call_allowance"] == 10
     assert budget["usage"]["ledger_created_at"]
     assert str(tmp_path) not in ready.text and "not-a-real-key" not in ready.text
