@@ -289,7 +289,7 @@ class ModelUsage(BaseModel):
     tokens_charged: int
     tokens_reserved: int
     context_chars: int
-    reservation_bound: Optional[str] = None  # e.g. "tiktoken/o200k_base" or "utf8-bytes"
+    reservation_bound: Optional[str] = None  # e.g. "tiktoken/o200k_base"
 
 
 class QueryResponse(BaseModel):
