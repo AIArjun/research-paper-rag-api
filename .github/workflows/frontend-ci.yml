@@ -1,0 +1,47 @@
+name: CI - Frontend (Research Observatory)
+
+on:
+  push:
+    branches: [main]
+    paths: ["frontend/**", ".github/workflows/frontend-ci.yml"]
+  pull_request:
+    branches: [main, "codex/**"]
+    paths: ["frontend/**", ".github/workflows/frontend-ci.yml"]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify bundled sample PDF checksums
+        run: |
+          cd public/samples
+          sha256sum -c <<'SUMS'
+          bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697  attention-is-all-you-need.pdf
+          23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233  retrieval-augmented-generation.pdf
+          SUMS
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
