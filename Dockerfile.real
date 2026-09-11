@@ -51,6 +51,8 @@ USER root
 COPY requirements-real-test.lock.txt ./
 RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-real-test.lock.txt && pip check
 COPY --chown=app:app tests ./tests
+# The verification-helper tests import scripts/verify_live_demo.py by path.
+COPY --chown=app:app scripts ./scripts
 USER app
 ENV LLM_PROVIDER=demo
 CMD ["python", "-m", "pytest", "tests", "-q"]
