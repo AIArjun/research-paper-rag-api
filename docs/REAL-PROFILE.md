@@ -39,13 +39,13 @@ Artifacts record the exact Git commit, image identity/size, time to ready, app-p
 
 ## Startup, diagnosis and deployment boundary
 
-The real image starts one Uvicorn worker and honors `PORT`. Its default build target runs the API; `--target test` runs tests. The measurement overrides the port and tests that one worker is still selected when `WEB_CONCURRENCY` suggests more. The image runs as a non-root user (UID 10001).
+The real image starts one Uvicorn worker and honors `PORT`. Its default build target runs the API; `--target test` runs tests. The measurement overrides the port and tests that one worker is still selected when `WEB_CONCURRENCY` suggests more. The server runs as a non-root user (UID 10001); since Stage 3 the runtime target starts as root only for the entrypoint that prepares the ledger directory and drops privileges (see [STAGE3.md](STAGE3.md)).
 
 Initialization/generation logs now include allowlisted exception type, module, missing dependency and HTTP status where available. They do not stringify exception bodies, keys, URLs or tracebacks. HTTP responses remain categorical. Stage 2c replaced question-prefix logging and raw exception responses with categorical errors and request correlation (see [STAGE2C.md](STAGE2C.md)); this is still not a whole-application logging/privacy review.
 
 Current Render settings still build `./Dockerfile`, not this real profile. Its dashboard start-command override wins over a Dockerfile CMD. A later deliberate deployment must select `./Dockerfile.real` and clear the override or explicitly align `PORT` and `--workers 1`, set the appropriate readiness path, and configure protection/secrets directly in Render. Do not change the existing public service merely to run these resource tests.
 
-Disk persistence is separate work: the paper registry and pending recovery metadata remain in process memory. Mounting a disk for Chroma alone does not establish correct cross-restart state.
+Disk persistence is separate work: the paper registry and pending recovery metadata remain in process memory. Mounting a disk for Chroma alone does not establish correct cross-restart state; Stage 3 therefore persists only the model-call ledger and keeps the corpus disposable ([STAGE3.md](STAGE3.md)). Since Stage 3 the runtime target starts as root only to hand a platform-mounted ledger directory to the `app` user and then drops to UID 10001 with an empty capability set (`scripts/real_entrypoint.sh`); the measurement runs the ledger inside a root-owned 0755 tmpfs mount and asserts that PID 1 is unprivileged.
 
 ## Evidence status
 

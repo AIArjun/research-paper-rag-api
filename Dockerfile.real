@@ -36,6 +36,12 @@ ENV EMBEDDING_MODEL=/opt/models/all-MiniLM-L6-v2 \
 RUN useradd --uid 10001 --create-home app && \
     mkdir -p /app/vectorstore /app/uploads && chown -R app:app /app /opt/models /opt/tiktoken
 COPY --chown=app:app app ./app
+# The entrypoint (scripts/real_entrypoint.sh) makes a mounted ledger directory
+# writable for "app" when the container starts as root, then drops to "app"
+# with no capabilities; started as a non-root user it is a plain exec.
+COPY scripts/real_entrypoint.sh /usr/local/bin/real-entrypoint
+RUN chmod 0755 /usr/local/bin/real-entrypoint
+ENTRYPOINT ["/usr/local/bin/real-entrypoint"]
 USER app
 EXPOSE 8001
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port \"${PORT:-8001}\" --workers 1"]
@@ -45,9 +51,15 @@ USER root
 COPY requirements-real-test.lock.txt ./
 RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-real-test.lock.txt && pip check
 COPY --chown=app:app tests ./tests
+# The verification-helper tests import scripts/verify_live_demo.py by path.
+COPY --chown=app:app scripts ./scripts
 USER app
 ENV LLM_PROVIDER=demo
 CMD ["python", "-m", "pytest", "tests", "-q"]
 
 # Default build target must run the API, including when Render builds this file.
+# It starts as root so the entrypoint can hand a platform-mounted ledger
+# directory to "app" before dropping privileges; the server itself never runs
+# as root (see scripts/real_entrypoint.sh and docs/STAGE3.md).
 FROM runtime-base AS runtime
+USER root

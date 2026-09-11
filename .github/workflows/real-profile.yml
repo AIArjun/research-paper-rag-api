@@ -11,6 +11,7 @@ on:
       - 'requirements-real*'
       - 'requirements-test*'
       - 'scripts/measure_real_profile.py'
+      - 'scripts/real_entrypoint.sh'
       - '.github/workflows/real-profile.yml'
 
 permissions:

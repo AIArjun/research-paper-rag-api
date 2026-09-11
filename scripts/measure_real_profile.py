@@ -26,7 +26,9 @@ MEASUREMENT_TOKEN = "measurement-only-fake-access-token-0123456789abcdef"
 MEASUREMENT_ENVIRONMENT = (
     "DEMO_ACCESS_TOKEN=" + MEASUREMENT_TOKEN,
     "ALLOWED_ORIGINS=",
-    "MODEL_CALL_LEDGER_PATH=/tmp/rag-measurement-ledger.sqlite3",
+    # Inside a root-owned, non-writable (0755) tmpfs mount, so the measurement
+    # proves the entrypoint hands the ledger directory to the runtime user.
+    "MODEL_CALL_LEDGER_PATH=/var/data/ledger/model-calls.sqlite3",
     "MAX_MODEL_CALLS_PER_DAY=1", "MAX_MODEL_CALLS_TOTAL=1",
     "MAX_MODEL_TOKENS_PER_DAY=2000", "MAX_MODEL_TOKENS_TOTAL=2000",
 )
@@ -60,6 +62,8 @@ result["pid1_memory_kib"] = {
     line.split(":", 1)[0]: int(line.split()[1])
     for line in status if line.startswith(("VmRSS:", "VmHWM:"))
 }
+result["pid1_uid"] = next((int(line.split()[1]) for line in status if line.startswith("Uid:")), None)
+result["pid1_cap_eff"] = next((line.split()[1] for line in status if line.startswith("CapEff:")), None)
 result["pid1_argv"] = [part.decode("utf-8", errors="replace")
     for part in Path("/proc/1/cmdline").read_bytes().split(b"\0") if part]
 print(json.dumps(result))
@@ -177,7 +181,8 @@ def measure_case(image, memory, cpus, directory, fixture_dir, ready_timeout):
         "status": "failed", "snapshots": {}, "requests": {},
         "scope": "Local embeddings and Chroma behind the protected API; provider client construction only; "
                  "no generation, accounting consumption or relevance evaluation.",
-        "protection": {"access_token": "fixed fake measurement token", "model_call_allowance": 1, "ledger": "throwaway /tmp file"},
+        "protection": {"access_token": "fixed fake measurement token", "model_call_allowance": 1,
+                       "ledger": "throwaway file in a root-owned 0755 tmpfs mount at /var/data"},
         "measurement_note": "cgroup totals include temporary docker-exec HTTP/observer processes; PID 1 RSS is app-process memory.",
     }
     path = directory / (memory + ".json")
@@ -186,6 +191,9 @@ def measure_case(image, memory, cpus, directory, fixture_dir, ready_timeout):
         command([
             "docker", "run", "--detach", "--name", name,
             "--network", "none", "--memory", memory, "--memory-swap", memory, "--cpus", cpus,
+            # A root-owned, non-world-writable mount like a platform disk: the
+            # ledger is only creatable there if the entrypoint prepared the directory.
+            "--mount", "type=tmpfs,destination=/var/data,tmpfs-mode=0755,tmpfs-size=16777216",
             "--env", "LLM_PROVIDER=openai", "--env", "OPENAI_API_KEY=offline-placeholder-not-a-credential",
             "--env", "LLM_MODEL=gpt-4o-mini", "--env", "PORT=8765", "--env", "WEB_CONCURRENCY=4",
             "--env", "HF_HUB_OFFLINE=1", "--env", "TRANSFORMERS_OFFLINE=1",
@@ -241,6 +249,9 @@ def measure_case(image, memory, cpus, directory, fixture_dir, ready_timeout):
                 "PID 1 did not honor the nondefault PORT=8765")
         require("--workers" in argv and argv[argv.index("--workers") + 1] == "1",
                 "PID 1 must explicitly keep one worker despite WEB_CONCURRENCY=4")
+        idle = report["snapshots"]["idle"]
+        require(idle.get("pid1_uid") == 10001 and idle.get("pid1_cap_eff") == "0000000000000000",
+                "PID 1 must run as the unprivileged runtime user with no effective capabilities")
         for label, credential in (("unauthenticated_papers", "none"), ("wrong_token_papers", "wrong")):
             denied = request(name, "GET", "/papers", credential=credential)
             report["requests"][label] = denied
