@@ -1,0 +1,27 @@
+{
+  "note": "Public arXiv PDFs bundled as demo fixtures. Each file was fetched from source_url and verified against sha256 before being committed. paper_id values returned by the backend are SHA-256 digests of the uploaded bytes, so they match sha256 here exactly.",
+  "papers": [
+    {
+      "file": "attention-is-all-you-need.pdf",
+      "title": "Attention Is All You Need",
+      "short": "Attention",
+      "authors": "Vaswani et al., 2017",
+      "source_url": "https://arxiv.org/pdf/1706.03762",
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "pages": 15,
+      "bytes": 2215244,
+      "license_note": "arXiv e-print; redistributed unmodified for demonstration."
+    },
+    {
+      "file": "retrieval-augmented-generation.pdf",
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+      "short": "RAG",
+      "authors": "Lewis et al., 2020",
+      "source_url": "https://arxiv.org/pdf/2005.11401",
+      "sha256": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+      "pages": 19,
+      "bytes": 885323,
+      "license_note": "arXiv e-print; redistributed unmodified for demonstration."
+    }
+  ]
+}
