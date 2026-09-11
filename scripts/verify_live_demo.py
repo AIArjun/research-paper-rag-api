@@ -55,14 +55,14 @@ DEFAULT_MANIFEST = [
         "source_url": "https://arxiv.org/pdf/1706.03762",
         "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
         "pages": 15,
-        "chunks": 97,
+        "chunks": 110,
     },
     {
         "file": "retrieval-augmented-generation.pdf",
         "source_url": "https://arxiv.org/pdf/2005.11401",
         "sha256": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
         "pages": 19,
-        "chunks": 171,
+        "chunks": 188,
     },
 ]
 

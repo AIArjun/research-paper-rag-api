@@ -1,0 +1,734 @@
+{
+ "measured_at": "2026-09-11",
+ "method": "Offline: the two fixtures extracted and chunked by the engine's own code, embedded with the pinned sentence-transformers/all-MiniLM-L6-v2 snapshot 1110a243 and stored in Chroma; similarity_search_with_relevance_scores with top_k=5 and the same paper_id filter as the live requests; the supplied context is RAGEngine._build_context over the five hits (6000-char cap). 'defining_sentences_in_context' checks that the sentence itself, not just its page, is in that context (whitespace-normalized). No provider call.",
+ "live_cases_exact": {
+  "note": "The three requests exactly as sent live at main 1d49927 (top_k=5, paper-filtered).",
+  "before_main_1d49927_default_extraction_500_100": {
+   "chunks": {
+    "attention-is-all-you-need.pdf": 97,
+    "retrieval-augmented-generation.pdf": 171
+   },
+   "cases": {
+    "live-1-attention-scaling": {
+     "question": "Why does scaled dot-product attention divide by the square root of d_k?",
+     "paper_id": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+     "top_k": 5,
+     "pages": [
+      4,
+      4,
+      4,
+      4,
+      7
+     ],
+     "scores": [
+      0.395,
+      0.354,
+      0.302,
+      0.136,
+      0.115
+     ],
+     "context_chars": 2561,
+     "defining_sentences_in_context": {
+      "dot products grow large in magnitude": false,
+      "scale by 1/sqrt(dk)": false
+     }
+    },
+    "live-2-rag-sequence-vs-token": {
+     "question": "What distinguishes RAG-Sequence from RAG-Token in how retrieved documents are used?",
+     "paper_id": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+     "top_k": 5,
+     "pages": [
+      17,
+      8,
+      7,
+      17,
+      1
+     ],
+     "scores": [
+      0.459,
+      0.45,
+      0.408,
+      0.342,
+      0.336
+     ],
+     "context_chars": 2543,
+     "defining_sentences_in_context": {
+      "RAG-Sequence uses the same document": false,
+      "RAG-Token draws a different document per token": false
+     }
+    },
+    "live-3-retriever-generator": {
+     "question": "In the RAG paper, which pre-trained models are used as the retriever and as the generator?",
+     "paper_id": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+     "top_k": 5,
+     "pages": [
+      1,
+      5,
+      3,
+      7,
+      9
+     ],
+     "scores": [
+      0.382,
+      0.358,
+      0.343,
+      0.239,
+      0.228
+     ],
+     "context_chars": 2421,
+     "defining_sentences_in_context": {
+      "DPR bi-encoder": false,
+      "BERT-base": false,
+      "BART-large": false
+     }
+    }
+   }
+  },
+  "after_word_gap_ratio_500_100": {
+   "chunks": {
+    "attention-is-all-you-need.pdf": 110,
+    "retrieval-augmented-generation.pdf": 188
+   },
+   "cases": {
+    "live-1-attention-scaling": {
+     "question": "Why does scaled dot-product attention divide by the square root of d_k?",
+     "paper_id": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+     "top_k": 5,
+     "pages": [
+      4,
+      4,
+      4,
+      4,
+      4
+     ],
+     "scores": [
+      0.541,
+      0.472,
+      0.424,
+      0.399,
+      0.333
+     ],
+     "context_chars": 2495,
+     "defining_sentences_in_context": {
+      "dot products grow large in magnitude": true,
+      "scale by 1/sqrt(dk)": true
+     }
+    },
+    "live-2-rag-sequence-vs-token": {
+     "question": "What distinguishes RAG-Sequence from RAG-Token in how retrieved documents are used?",
+     "paper_id": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+     "top_k": 5,
+     "pages": [
+      8,
+      7,
+      3,
+      8,
+      3
+     ],
+     "scores": [
+      0.578,
+      0.561,
+      0.549,
+      0.529,
+      0.479
+     ],
+     "context_chars": 2635,
+     "defining_sentences_in_context": {
+      "RAG-Sequence uses the same document": true,
+      "RAG-Token draws a different document per token": true
+     }
+    },
+    "live-3-retriever-generator": {
+     "question": "In the RAG paper, which pre-trained models are used as the retriever and as the generator?",
+     "paper_id": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+     "top_k": 5,
+     "pages": [
+      6,
+      7,
+      10,
+      17,
+      9
+     ],
+     "scores": [
+      0.414,
+      0.391,
+      0.361,
+      0.338,
+      0.337
+     ],
+     "context_chars": 2594,
+     "defining_sentences_in_context": {
+      "DPR bi-encoder": false,
+      "BERT-base": false,
+      "BART-large": false
+     }
+    }
+   }
+  },
+  "after_word_gap_ratio_1000_200_comparison_only": {
+   "chunks": {
+    "attention-is-all-you-need.pdf": 54,
+    "retrieval-augmented-generation.pdf": 93
+   },
+   "cases": {
+    "live-1-attention-scaling": {
+     "question": "Why does scaled dot-product attention divide by the square root of d_k?",
+     "paper_id": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+     "top_k": 5,
+     "pages": [
+      4,
+      4,
+      4,
+      4,
+      9
+     ],
+     "scores": [
+      0.461,
+      0.377,
+      0.31,
+      0.292,
+      0.116
+     ],
+     "context_chars": 4315,
+     "defining_sentences_in_context": {
+      "dot products grow large in magnitude": true,
+      "scale by 1/sqrt(dk)": true
+     }
+    },
+    "live-2-rag-sequence-vs-token": {
+     "question": "What distinguishes RAG-Sequence from RAG-Token in how retrieved documents are used?",
+     "paper_id": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+     "top_k": 5,
+     "pages": [
+      8,
+      3,
+      7,
+      3,
+      2
+     ],
+     "scores": [
+      0.617,
+      0.532,
+      0.4,
+      0.399,
+      0.388
+     ],
+     "context_chars": 4833,
+     "defining_sentences_in_context": {
+      "RAG-Sequence uses the same document": false,
+      "RAG-Token draws a different document per token": true
+     }
+    },
+    "live-3-retriever-generator": {
+     "question": "In the RAG paper, which pre-trained models are used as the retriever and as the generator?",
+     "paper_id": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+     "top_k": 5,
+     "pages": [
+      2,
+      17,
+      9,
+      3,
+      18
+     ],
+     "scores": [
+      0.383,
+      0.355,
+      0.336,
+      0.309,
+      0.307
+     ],
+     "context_chars": 3745,
+     "defining_sentences_in_context": {
+      "DPR bi-encoder": false,
+      "BERT-base": true,
+      "BART-large": false
+     }
+    }
+   }
+  }
+ },
+ "decision": "Keep 500/100. Larger page-local chunks (1000/200) do not bring the defining DPR bi-encoder or 'we use BART-large' sentences into the context for live-3 and drop the RAG-Sequence defining sentence for live-2; they also lower every top score. Remaining blocker: the Section 2.2/2.3 passages of the RAG paper are not retrieved for the model-names question by this embedding model under either chunking.",
+ "extra_offline_cases_unfiltered": {
+  "note": "Additional rubric questions run WITHOUT a paper filter (labeled separately; not the live requests).",
+  "before": {
+   "chunks": {
+    "attention-is-all-you-need.pdf": 97,
+    "retrieval-augmented-generation.pdf": 171
+   },
+   "questions": {
+    "rag-sequence-vs-token": {
+     "pages": [
+      17,
+      8,
+      7,
+      17,
+      1
+     ],
+     "expected_any_of": [
+      3
+     ],
+     "expected_hit": false,
+     "top_score": 0.459,
+     "hits": [
+      {
+       "paper": "retrieval",
+       "page": 17,
+       "score": 0.459,
+       "preview": "ecodingforQAas\nwedidnotfindbeamsearchimprovedresults. ForOpen-MSMarcoandJeopardyquestionge"
+      },
+      {
+       "paper": "retrieval",
+       "page": 8,
+       "score": 0.45,
+       "preview": "the\nflexibilitytoadjustthenumberofretrieveddocumentsattesttime,whichcanaffectperformancean"
+      },
+      {
+       "paper": "retrieval",
+       "page": 7,
+       "score": 0.408,
+       "preview": "tion 4.3 shows that RAG models are more factual and specific than\nBARTforJeopardyquestiong"
+      },
+      {
+       "paper": "retrieval",
+       "page": 17,
+       "score": 0.342,
+       "preview": "Appendices for Retrieval-Augmented Generation for\nKnowledge-Intensive NLP Tasks\nA Implemen"
+      },
+      {
+       "paper": "retrieval",
+       "page": 1,
+       "score": 0.336,
+       "preview": "RAG models where the parametric\nmemoryisapre-trainedseq2seqmodelandthenon-parametricmemory"
+      }
+     ]
+    },
+    "rag-retriever-generator": {
+     "pages": [
+      1,
+      5,
+      3,
+      7,
+      9
+     ],
+     "expected_any_of": [
+      2,
+      3
+     ],
+     "expected_hit": true,
+     "top_score": 0.382,
+     "hits": [
+      {
+       "paper": "retrieval",
+       "page": 1,
+       "score": 0.382,
+       "preview": "RAG models where the parametric\nmemoryisapre-trainedseq2seqmodelandthenon-parametricmemory"
+      },
+      {
+       "paper": "retrieval",
+       "page": 5,
+       "score": 0.358,
+       "preview": "wering\nTable 1 shows results for RAG along with state-of-the-art models. On all four open-"
+      },
+      {
+       "paper": "retrieval",
+       "page": 3,
+       "score": 0.343,
+       "preview": "ed\nstate-of-the-artresultsonadiversesetofgenerationtasksandoutperformscomparably-sizedT5\nm"
+      },
+      {
+       "paper": "retrieval",
+       "page": 7,
+       "score": 0.239,
+       "preview": "tion 4.3 shows that RAG models are more factual and specific than\nBARTforJeopardyquestiong"
+      },
+      {
+       "paper": "retrieval",
+       "page": 9,
+       "score": 0.228,
+       "preview": "ngle, unified\narchitecture,bylearningaretrievalmoduletoaugmentpre-trained,generativelangua"
+      }
+     ]
+    },
+    "attention-scaling": {
+     "pages": [
+      4,
+      4,
+      4,
+      11,
+      2
+     ],
+     "expected_any_of": [
+      4
+     ],
+     "expected_hit": true,
+     "top_score": 0.366,
+     "hits": [
+      {
+       "paper": "attention",
+       "page": 4,
+       "score": 0.366,
+       "preview": "ScaledDot-ProductAttention Multi-HeadAttention\nFigure 2: (left) Scaled Dot-Product Attenti"
+      },
+      {
+       "paper": "attention",
+       "page": 4,
+       "score": 0.311,
+       "preview": "etherintomatricesK andV. Wecompute\nthematrixofoutputsas:\nQKT\nAttention(Q,K,V)=softmax( \u221a )"
+      },
+      {
+       "paper": "attention",
+       "page": 4,
+       "score": 0.223,
+       "preview": "workwith\ndk\nasinglehiddenlayer. Whilethetwoaresimilarintheoreticalcomplexity,dot-productat"
+      },
+      {
+       "paper": "retrieval",
+       "page": 11,
+       "score": 0.218,
+       "preview": "n,YacineJernite,EthanPerez,DavidGrangier,JasonWeston,andMichaelAuli.ELI5:\nLongformquestion"
+      },
+      {
+       "paper": "attention",
+       "page": 2,
+       "score": 0.211,
+       "preview": "34].\nTo the best of our knowledge, however, the Transformer is the first transduction mode"
+      }
+     ]
+    },
+    "transformer-encoder-layers": {
+     "pages": [
+      3,
+      3,
+      1,
+      3,
+      5
+     ],
+     "expected_any_of": [
+      3
+     ],
+     "expected_hit": true,
+     "top_score": 0.401,
+     "hits": [
+      {
+       "paper": "attention",
+       "page": 3,
+       "score": 0.401,
+       "preview": "Figure1: TheTransformer-modelarchitecture.\nTheTransformerfollowsthisoverallarchitectureusi"
+      },
+      {
+       "paper": "attention",
+       "page": 3,
+       "score": 0.362,
+       "preview": "nections,allsub-layersinthemodel,aswellastheembedding\nlayers,produceoutputsofdimensiond =5"
+      },
+      {
+       "paper": "attention",
+       "page": 1,
+       "score": 0.19,
+       "preview": "z\u2217 \u2020 \u0141ukaszKaiser\u2217\nGoogleResearch UniversityofToronto GoogleBrain\nllion@google.com aidan@c"
+      },
+      {
+       "paper": "attention",
+       "page": 3,
+       "score": 0.189,
+       "preview": "i-headself-attentionmechanism,andthesecondisasimple,position-\nwisefullyconnectedfeed-forwa"
+      },
+      {
+       "paper": "attention",
+       "page": 5,
+       "score": 0.175,
+       "preview": "ForwardNetworks\nInadditiontoattentionsub-layers,eachofthelayersinourencoderanddecoderconta"
+      }
+     ]
+    },
+    "transformer-bleu-en-de": {
+     "pages": [
+      10,
+      1,
+      1,
+      8,
+      9
+     ],
+     "expected_any_of": [
+      1,
+      8
+     ],
+     "expected_hit": true,
+     "top_score": 0.481,
+     "hits": [
+      {
+       "paper": "attention",
+       "page": 10,
+       "score": 0.481,
+       "preview": "tperformstheBerkeley-\nParser[29]evenwhentrainingonlyontheWSJtrainingsetof40Ksentences.\n7 C"
+      },
+      {
+       "paper": "attention",
+       "page": 1,
+       "score": 0.45,
+       "preview": "-German translation task, improving over the existing best results, including\nensembles,by"
+      },
+      {
+       "paper": "attention",
+       "page": 1,
+       "score": 0.411,
+       "preview": "oder through an attention\nmechanism. We propose a new simple network architecture, the Tra"
+      },
+      {
+       "paper": "attention",
+       "page": 8,
+       "score": 0.325,
+       "preview": "dthe\npositionalencodingsinboththeencoderanddecoderstacks. Forthebasemodel,weusearateof\nP ="
+      },
+      {
+       "paper": "attention",
+       "page": 9,
+       "score": 0.322,
+       "preview": "setting,\nusingthelargerhigh-confidenceandBerkleyParsercorporafromwithapproximately17Msente"
+      }
+     ]
+    }
+   }
+  },
+  "after": {
+   "chunks": {
+    "attention-is-all-you-need.pdf": 110,
+    "retrieval-augmented-generation.pdf": 188
+   },
+   "questions": {
+    "rag-sequence-vs-token": {
+     "pages": [
+      8,
+      7,
+      3,
+      8,
+      3
+     ],
+     "expected_any_of": [
+      3
+     ],
+     "expected_hit": true,
+     "top_score": 0.578,
+     "hits": [
+      {
+       "paper": "retrieval",
+       "page": 8,
+       "score": 0.578,
+       "preview": "rieved\ndocuments. Figure 3 (right) shows that retrieving more documents leads to higher Ro"
+      },
+      {
+       "paper": "retrieval",
+       "page": 7,
+       "score": 0.561,
+       "preview": "ms to\ntotal ngrams generated by different models. Table 5 shows that RAG-Sequence\u2019s genera"
+      },
+      {
+       "paper": "retrieval",
+       "page": 3,
+       "score": 0.549,
+       "preview": "text. In one approach, RAG-Sequence, the model uses the same document\nto predict each targ"
+      },
+      {
+       "paper": "retrieval",
+       "page": 8,
+       "score": 0.529,
+       "preview": "t\ndocuments, and we do not observe significant differences in performance between them. We"
+      },
+      {
+       "paper": "retrieval",
+       "page": 3,
+       "score": 0.479,
+       "preview": "t sequence\nprobability for each document, which are then marginalized,\nN\n(cid:88) (cid:88)"
+      }
+     ]
+    },
+    "rag-retriever-generator": {
+     "pages": [
+      6,
+      7,
+      10,
+      17,
+      9
+     ],
+     "expected_any_of": [
+      2,
+      3
+     ],
+     "expected_hit": false,
+     "top_score": 0.414,
+     "hits": [
+      {
+       "paper": "retrieval",
+       "page": 6,
+       "score": 0.414,
+       "preview": "clearly demonstrating the effectiveness of RAG on\nthe task over a state-of-the-art generat"
+      },
+      {
+       "paper": "retrieval",
+       "page": 7,
+       "score": 0.391,
+       "preview": "ms to\ntotal ngrams generated by different models. Table 5 shows that RAG-Sequence\u2019s genera"
+      },
+      {
+       "paper": "retrieval",
+       "page": 10,
+       "score": 0.361,
+       "preview": "s\npaper, as well as HuggingFace for their help in open-sourcing code to run RAG models. Th"
+      },
+      {
+       "paper": "retrieval",
+       "page": 17,
+       "score": 0.338,
+       "preview": "notators were encouraged to research the topic using the internet, and were given detailed"
+      },
+      {
+       "paper": "retrieval",
+       "page": 9,
+       "score": 0.337,
+       "preview": "is said, RAG techniques may work well in these settings, and\ncould represent promising fut"
+      }
+     ]
+    },
+    "attention-scaling": {
+     "pages": [
+      4,
+      4,
+      1,
+      4,
+      4
+     ],
+     "expected_any_of": [
+      4
+     ],
+     "expected_hit": true,
+     "top_score": 0.44,
+     "hits": [
+      {
+       "paper": "attention",
+       "page": 4,
+       "score": 0.44,
+       "preview": ", additive attention outperforms\nk\ndot product attention without scaling for larger values"
+      },
+      {
+       "paper": "attention",
+       "page": 4,
+       "score": 0.396,
+       "preview": "Scaled Dot-Product Attention Multi-Head Attention\nFigure 2: (left) Scaled Dot-Product Atte"
+      },
+      {
+       "paper": "attention",
+       "page": 1,
+       "score": 0.371,
+       "preview": "o evaluate this idea. Ashish, with Illia, designed and implemented the first Transformer m"
+      },
+      {
+       "paper": "attention",
+       "page": 4,
+       "score": 0.348,
+       "preview": "tion computes the compatibility function using a feed-forward network with\ndk\na single hid"
+      },
+      {
+       "paper": "attention",
+       "page": 4,
+       "score": 0.336,
+       "preview": "ries, keys and values we then perform the attention function in parallel, yielding d -dime"
+      }
+     ]
+    },
+    "transformer-encoder-layers": {
+     "pages": [
+      3,
+      3,
+      3,
+      5,
+      5
+     ],
+     "expected_any_of": [
+      3
+     ],
+     "expected_hit": true,
+     "top_score": 0.596,
+     "hits": [
+      {
+       "paper": "attention",
+       "page": 3,
+       "score": 0.596,
+       "preview": "Figure 1: The Transformer - model architecture.\nThe Transformer follows this overall archi"
+      },
+      {
+       "paper": "attention",
+       "page": 3,
+       "score": 0.378,
+       "preview": "ention over the output of the encoder stack. Similar to the encoder, we employ residual co"
+      },
+      {
+       "paper": "attention",
+       "page": 3,
+       "score": 0.347,
+       "preview": "lf. To facilitate these residual connections, all sub-layers in the model, as well as the "
+      },
+      {
+       "paper": "attention",
+       "page": 5,
+       "score": 0.299,
+       "preview": "ely and identically. This\nconsists of two linear transformations with a ReLU activation in"
+      },
+      {
+       "paper": "attention",
+       "page": 5,
+       "score": 0.224,
+       "preview": "In\nour model, we share the same weight matrix between the two embedding layers and the pre"
+      }
+     ]
+    },
+    "transformer-bleu-en-de": {
+     "pages": [
+      8,
+      1,
+      8,
+      8,
+      9
+     ],
+     "expected_any_of": [
+      1,
+      8
+     ],
+     "expected_hit": true,
+     "top_score": 0.843,
+     "hits": [
+      {
+       "paper": "attention",
+       "page": 8,
+       "score": 0.843,
+       "preview": "l learns to be more unsure, but improves accuracy and BLEU score.\n6 Results\n6.1 Machine Tr"
+      },
+      {
+       "paper": "attention",
+       "page": 1,
+       "score": 0.634,
+       "preview": "d requiring significantly\nless time to train. Our model achieves 28.4 BLEU on the WMT 2014"
+      },
+      {
+       "paper": "attention",
+       "page": 8,
+       "score": 0.545,
+       "preview": "is\nlisted in the bottom line of Table 3. Training took 3.5 days on 8 P100 GPUs. Even our b"
+      },
+      {
+       "paper": "attention",
+       "page": 8,
+       "score": 0.496,
+       "preview": "Table 2: The Transformer achieves better BLEU scores than previous state-of-the-art models"
+      },
+      {
+       "paper": "attention",
+       "page": 9,
+       "score": 0.487,
+       "preview": "Table 3: Variations on the Transformer architecture. Unlisted values are identical to thos"
+      }
+     ]
+    }
+   }
+  }
+ }
+}
