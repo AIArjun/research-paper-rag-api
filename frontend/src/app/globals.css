@@ -1514,8 +1514,20 @@ button, input, textarea, select {
   .bar__by {
     display: none;
   }
+  .bar__side {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: 100%;
+    min-width: 0;
+  }
   .status {
     max-width: 100%;
+    min-width: 0;
+    border-radius: 16px;
+  }
+  .status__text {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .composer__controls {
     width: 100%;
