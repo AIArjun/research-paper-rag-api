@@ -34,6 +34,18 @@ class StorageMutationError(RuntimeError):
         self.cleanup_required = cleanup_required
 
 
+class BackendUnavailableError(RuntimeError):
+    """The requested pipeline has no usable initialized backend."""
+
+    def __init__(self, category: str = "backend_unavailable"):
+        super().__init__("The configured retrieval/generation backend is unavailable.")
+        self.category = category
+
+
+class GenerationError(RuntimeError):
+    """A configured model failed to produce an answer; never a demo fallback."""
+
+
 class RAGEngine:
     """
     Retrieval-Augmented Generation engine for research papers.
@@ -52,21 +64,38 @@ class RAGEngine:
         # Failed storage mutations remain recoverable by retrying deletion.
         # This guard is process-local; durable recovery is a separate milestone.
         self._pending_cleanup: dict[str, list[str]] = {}
+        self._pending_metadata: dict[str, dict] = {}
         self._mutation_lock = RLock()
+        self._configured_provider = settings.LLM_PROVIDER
+        self._configured_model = settings.LLM_MODEL
+        self._init_error: Optional[str] = None
         self._vectorstore = None
         self._embeddings = None
         self._llm = None
         self._initialize()
 
     def _initialize(self):
-        """Initialize embedding model and vector store."""
-        # In demo mode, skip loading heavy ML models to stay under memory limits
-        if settings.LLM_PROVIDER == "demo":
-            logger.info("Running in demo mode — skipping embedding model and vector store.")
-            self._embeddings = None
-            self._vectorstore = None
+        """Record explicit initialization failures without activating a demo fallback."""
+        self._embeddings = None
+        self._vectorstore = None
+        self._llm = None
+        self._init_error = None
+        try:
+            settings.validate()
+        except (ValueError, TypeError):
+            self._init_error = "invalid_configuration"
+            logger.error("RAG initialization failed: invalid_configuration")
             return
 
+        if self._configured_provider == "demo":
+            logger.info("Running in demo mode — skipping embedding model and vector store.")
+            return
+        if self._configured_provider == "openai" and not settings.OPENAI_API_KEY.strip():
+            self._init_error = "missing_api_key"
+            logger.error("RAG initialization failed: missing_api_key")
+            return
+
+        failure_category = "embedding_initialization_failed"
         try:
             from langchain_community.embeddings import HuggingFaceEmbeddings
             from langchain_community.vectorstores import Chroma
@@ -76,44 +105,84 @@ class RAGEngine:
                 model_name=settings.EMBEDDING_MODEL,
                 model_kwargs={"device": "cpu"},
             )
+            failure_category = "storage_initialization_failed"
             self._vectorstore = Chroma(
                 collection_name="research_papers",
                 embedding_function=self._embeddings,
                 persist_directory=settings.VECTORSTORE_PATH,
             )
             logger.info("Vector store initialized (ChromaDB).")
+            failure_category = "model_initialization_failed"
             self._init_llm()
-        except ImportError as e:
-            logger.warning(f"LangChain not fully installed: {e}. Running in demo mode.")
+        except ImportError:
+            self._init_error = "missing_dependency"
+        except Exception:
+            self._init_error = failure_category
+        if self._init_error is not None:
             self._embeddings = None
             self._vectorstore = None
-        except Exception as e:
-            logger.warning(f"Initialization error: {e}. Running in demo mode.")
+            self._llm = None
+            logger.error("RAG initialization failed: %s", self._init_error)
 
     def _init_llm(self):
-        """Initialize LLM based on provider setting."""
-        try:
-            if settings.LLM_PROVIDER == "openai" and settings.OPENAI_API_KEY:
-                from langchain_openai import ChatOpenAI
+        """Construct a client; this does not verify remote credentials/connectivity."""
+        if self._configured_provider == "openai":
+            from langchain_openai import ChatOpenAI
 
-                self._llm = ChatOpenAI(
-                    model=settings.LLM_MODEL,
-                    temperature=0.1,
-                    api_key=settings.OPENAI_API_KEY,
-                )
-                logger.info(f"LLM initialized: OpenAI {settings.LLM_MODEL}")
-            elif settings.LLM_PROVIDER == "ollama":
-                from langchain_community.llms import Ollama
+            self._llm = ChatOpenAI(
+                model=self._configured_model,
+                temperature=0.1,
+                api_key=settings.OPENAI_API_KEY,
+            )
+        elif self._configured_provider == "ollama":
+            from langchain_community.llms import Ollama
 
-                self._llm = Ollama(
-                    model=settings.LLM_MODEL,
-                    base_url=settings.OLLAMA_URL,
-                )
-                logger.info(f"LLM initialized: Ollama {settings.LLM_MODEL}")
+            self._llm = Ollama(
+                model=self._configured_model,
+                base_url=settings.OLLAMA_URL,
+            )
+
+    def get_readiness(self) -> dict:
+        """Cheap local pipeline state; no model request, storage read or network probe."""
+        with self._mutation_lock:
+            real = isinstance(self._configured_provider, str) and self._configured_provider in {"openai", "ollama"}
+            vector_ready = self._vectorstore is not None and self._embeddings is not None
+            if self._init_error is not None:
+                retrieval, generation = "unavailable", "unavailable"
+            elif real:
+                retrieval = "chroma" if vector_ready else "unavailable"
+                generation = self._configured_provider if self._llm is not None else "unavailable"
             else:
-                logger.info("No LLM configured — using demo mode for answers.")
-        except Exception as e:
-            logger.warning(f"LLM init failed: {e}. Using demo mode.")
+                retrieval = "chroma" if vector_ready else "memory-keyword"
+                generation = "demo"
+            return {
+                "configured_provider": (
+                    self._configured_provider if isinstance(self._configured_provider, str) else "invalid"
+                ),
+                "configured_model": (
+                    self._configured_model if isinstance(self._configured_model, str) else "invalid"
+                ),
+                "effective_retrieval": retrieval,
+                "effective_generation": generation,
+                "ready": (
+                    retrieval != "unavailable" and generation != "unavailable"
+                    and not self._pending_cleanup
+                ),
+                "init_error": self._init_error,
+                "pending_cleanup_ids": list(self._pending_cleanup),
+                # Local client construction is not evidence of a remote call.
+                "provider_connection_verified": False,
+            }
+
+    def assert_backend_ready(self) -> None:
+        """Fail closed for an invalid or incomplete requested real pipeline."""
+        with self._mutation_lock:
+            if self._init_error is not None:
+                raise BackendUnavailableError(self._init_error)
+            if self._configured_provider in {"openai", "ollama"} and (
+                self._vectorstore is None or self._embeddings is None or self._llm is None
+            ):
+                raise BackendUnavailableError()
 
     def _extract_pdf(self, pdf_bytes: bytes) -> list[dict]:
         """Extract text from PDF, page by page."""
@@ -199,6 +268,7 @@ class RAGEngine:
             dict with paper_id, canonical filename, pages count, chunks count
         """
         with self._mutation_lock:
+            self.assert_backend_ready()
             return self._ingest_paper(pdf_bytes, filename)
 
     def _ingest_paper(self, pdf_bytes: bytes, filename: str) -> dict:
@@ -241,7 +311,7 @@ class RAGEngine:
         }
 
         # Add to vector store
-        if self._vectorstore and self._embeddings:
+        if self._vectorstore is not None and self._embeddings is not None:
             texts = [c["text"] for c in chunks]
             metadatas = [
                 {
@@ -261,6 +331,7 @@ class RAGEngine:
                     self._vectorstore.delete(ids=ids)
                 except Exception:
                     self._pending_cleanup[paper_id] = ids
+                    self._pending_metadata[paper_id] = paper.copy()
                     raise StorageMutationError(
                         f"Indexing and rollback failed for paper '{paper_id}'. "
                         "Corpus queries are blocked until deletion is retried successfully.",
@@ -316,7 +387,8 @@ class RAGEngine:
 
         with self._mutation_lock:
             self.assert_storage_ready()
-            if self._vectorstore:
+            self.assert_backend_ready()
+            if self._vectorstore is not None:
                 search_kwargs = {"k": top_k}
                 if paper_id:
                     search_kwargs["filter"] = {"paper_id": paper_id}
@@ -350,7 +422,7 @@ class RAGEngine:
         # ─── Generation ───
         gen_start = time.time()
 
-        if self._llm and citations:
+        if self._llm is not None and citations:
             context = "\n\n".join(
                 f"[Source: {c['paper']}, Page {c.get('page', '?')}]\n{c['text']}"
                 for c in passages
@@ -366,11 +438,13 @@ class RAGEngine:
             try:
                 response = self._llm.invoke(prompt)
                 answer = response.content if hasattr(response, "content") else str(response)
-                model_used = settings.LLM_MODEL
+                model_used = self._configured_model
             except Exception as e:
-                logger.error(f"LLM generation failed: {e}")
-                answer = self._demo_generate(question, citations)
-                model_used = "demo-fallback"
+                logger.error("LLM generation failed")
+                raise GenerationError("The configured model failed to generate an answer.") from e
+        elif not citations:
+            answer = "The retrieved sources contain insufficient evidence to answer this question."
+            model_used = "not-invoked"
         else:
             answer = self._demo_generate(question, citations)
             model_used = "demo-mode"
@@ -440,13 +514,27 @@ class RAGEngine:
         )
         return answer
 
-    def list_papers(self) -> list[dict]:
-        """List all papers in the knowledge base."""
+    def list_papers(self, include_pending: bool = False) -> list[dict]:
+        """List ready papers; optionally expose recoverable pending mutations with status."""
         with self._mutation_lock:
-            return [
-                paper.copy() for paper_id, paper in self.papers.items()
-                if paper_id not in self._pending_cleanup
-            ]
+            if not include_pending:
+                return [
+                    paper.copy() for paper_id, paper in self.papers.items()
+                    if paper_id not in self._pending_cleanup
+                ]
+            rows = {
+                paper_id: {**paper, "status": "ready"}
+                for paper_id, paper in self.papers.items()
+            }
+            for paper_id, ids in self._pending_cleanup.items():
+                metadata = self.papers.get(paper_id) or self._pending_metadata.get(paper_id)
+                if metadata is None:
+                    metadata = {
+                        "paper_id": paper_id, "filename": None, "pages": None,
+                        "chunks": len(ids), "uploaded_at": None,
+                    }
+                rows[paper_id] = {**metadata, "status": "pending_cleanup"}
+            return list(rows.values())
 
     def delete_paper(self, paper_id: str) -> bool:
         """Remove a paper and its chunks from the knowledge base."""
@@ -457,7 +545,7 @@ class RAGEngine:
         if paper_id not in self.papers and paper_id not in self._pending_cleanup:
             return False
 
-        if self._vectorstore:
+        if self._vectorstore is not None:
             # Delete from ChromaDB
             ids_to_delete = self._pending_cleanup.get(paper_id)
             if ids_to_delete is None:
@@ -485,6 +573,7 @@ class RAGEngine:
         ]
         self.papers.pop(paper_id, None)
         self._pending_cleanup.pop(paper_id, None)
+        self._pending_metadata.pop(paper_id, None)
         logger.info(f"Deleted paper: {paper_id}")
         return True
 
