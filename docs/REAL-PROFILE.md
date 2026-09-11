@@ -9,6 +9,7 @@ Stage 2b builds the actual local embedding and Chroma stack. A successful measur
 - `requirements-real-test.in` and its lock add test tools while constraining the runtime package versions. `requirements.txt` is a compatibility entry point to the real lock; it is not portable to other Python/OS/CPU combinations. `requirements-deploy.txt` and the existing `Dockerfile` remain the demo profile.
 - Embeddings: `sentence-transformers/all-MiniLM-L6-v2` revision `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`. The build fetches tokenizer/config files and `model.safetensors` into `/opt/models/all-MiniLM-L6-v2`. Runtime uses this local path with offline flags. The embedding batch size is 32.
 - Modular integrations: `langchain-huggingface`, `langchain-chroma`, `langchain-openai` and `langchain-ollama`. Explicit demo mode does not load these heavy backends.
+- Token reservations (Stage 2c): the build caches the tiktoken `o200k_base` and `cl100k_base` encoding tables under `/opt/tiktoken` (`TIKTOKEN_CACHE_DIR`), so the network-isolated runtime resolves the exact bound for OpenAI models without a download. A model whose encoding is not cached fails closed as `token_bound_unavailable`; readiness reports the bound in use (`model_budget.token_bound`) and the measurement asserts `tiktoken/o200k_base` for `gpt-4o-mini`.
 
 Regenerate the Linux locks with uv 0.12.13 (from the repository root):
 

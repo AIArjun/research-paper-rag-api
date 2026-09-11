@@ -7,17 +7,17 @@ _CATEGORIES = frozenset({
     "invalid_configuration", "missing_api_key", "missing_dependency",
     "embedding_initialization_failed", "storage_initialization_failed",
     "model_initialization_failed", "generation_failed", "ingestion_failed",
-    "query_failed", "budget_not_configured", "ledger_unavailable",
+    "query_failed", "budget_not_configured", "ledger_unavailable", "token_bound_unavailable",
 })
 _MODULE_ROOTS = frozenset({
     "builtins", "langchain_huggingface", "langchain_chroma", "langchain_openai",
     "langchain_ollama", "langchain_core", "sentence_transformers", "transformers",
     "torch", "chromadb", "openai", "ollama", "pydantic", "pydantic_core",
     "huggingface_hub", "httpx", "httpcore", "requests", "numpy", "tokenizers",
-    "safetensors", "onnxruntime", "sqlite3", "pdfminer", "pdfplumber", "pypdf",
+    "safetensors", "onnxruntime", "sqlite3", "pdfminer", "pdfplumber", "pypdf", "tiktoken",
 })
 _EXCEPTION_TYPES = frozenset({
-    "Exception", "RuntimeError", "ValueError", "TypeError", "ImportError",
+    "Exception", "RuntimeError", "ValueError", "TypeError", "ImportError", "KeyError",
     "ModuleNotFoundError", "OSError", "FileNotFoundError", "PermissionError",
     "MemoryError", "TimeoutError", "ConnectionError", "ValidationError",
     "OutOfMemoryError", "APIError", "APIStatusError", "APIConnectionError",

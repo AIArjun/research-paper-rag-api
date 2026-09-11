@@ -229,6 +229,8 @@ def measure_case(image, memory, cpus, directory, fixture_dir, ready_timeout):
         budget = ready.get("model_budget") or {}
         require(budget.get("state") == "ok" and budget.get("configured") is True, "Model-call accounting is not ready")
         require((budget.get("usage") or {}).get("calls_total") == 0, "Ledger already holds calls before any query")
+        require(budget.get("token_bound") == "tiktoken/o200k_base",
+                "The offline tiktoken bound for gpt-4o-mini did not resolve from the build-time cache")
         require(MEASUREMENT_TOKEN not in json.dumps(ready), "Readiness must not expose the access token")
         report["snapshots"]["idle"] = metrics(name)
         require(all(report["snapshots"]["idle"].get(field) is not None

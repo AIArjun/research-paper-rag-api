@@ -55,6 +55,23 @@ def fake_modules(monkeypatch):
     modules["langchain_chroma"].Chroma = FakeStore
     modules["langchain_ollama"].OllamaLLM = FakeModel
     modules["langchain_openai"].ChatOpenAI = FakeModel
+
+    # A deterministic tokenizer: one token per character; "unmapped-model" is unknown.
+    class FakeEncoding:
+        name = "fake_base"
+
+        def encode(self, text, disallowed_special=()):
+            return [1] * len(text)
+
+    def encoding_for_model(model):
+        if model == "unmapped-model":
+            raise KeyError(model)
+        return FakeEncoding()
+
+    tiktoken = ModuleType("tiktoken")
+    tiktoken.encoding_for_model = encoding_for_model
+    monkeypatch.setitem(sys.modules, "tiktoken", tiktoken)
+    modules["tiktoken"] = tiktoken
     return modules
 
 

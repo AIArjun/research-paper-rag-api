@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import json
 import threading
 import time
 
@@ -12,7 +13,30 @@ import app.main as api
 from app.config import settings
 from app.protection import Admission, AdmissionSlot
 from app.rag_engine import RAGEngine
-from tests.conftest import AUTH_HEADERS, minimal_pdf
+from tests.conftest import AUTH_HEADERS, TEST_ACCESS_TOKEN, minimal_pdf
+from tests.test_protection_api import _scope
+
+AUTH_ASGI = [(b"authorization", ("Bearer " + TEST_ACCESS_TOKEN).encode("ascii"))]
+
+
+def _multipart_upload(pdf: bytes, boundary: bytes = b"rag-test-boundary") -> bytes:
+    return (
+        b"--" + boundary + b"\r\nContent-Disposition: form-data; name=\"file\"; filename=\"paper.pdf\"\r\n"
+        b"Content-Type: application/pdf\r\n\r\n" + pdf + b"\r\n--" + boundary + b"--\r\n"
+    )
+
+
+def _upload_headers(body: bytes, authenticated: bool = True):
+    headers = [(b"content-type", b"multipart/form-data; boundary=rag-test-boundary"),
+               (b"content-length", str(len(body)).encode("ascii"))]
+    return (AUTH_ASGI if authenticated else []) + headers
+
+
+def _fresh_demo(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "demo")
+    monkeypatch.setattr(api, "rag", RAGEngine())
+    monkeypatch.setattr(api, "mutation_slot", AdmissionSlot(1, "mutation"))
+    monkeypatch.setattr(api, "query_slot", AdmissionSlot(2, "query"))
 
 
 @pytest.fixture
@@ -198,6 +222,124 @@ def test_query_concurrency_is_bounded_and_slots_return(client, monkeypatch):
         "retrieval_time_ms": 0.0, "generation_time_ms": 0.0, "model_used": "demo-mode", "model_usage": None,
     })
     assert client.post("/query", json={"question": "What is attention?"}).status_code == 200
+
+
+def test_second_simultaneous_upload_is_refused_before_any_body_is_received(monkeypatch):
+    """Review probe: two authorized uploads with held body receivers; only one may proceed."""
+    _fresh_demo(monkeypatch)
+    seen_in_worker = []
+
+    def extract(_):
+        # The admission taken before parsing is the one held here, inside the worker thread.
+        seen_in_worker.append((api.mutation_slot.in_use, api.mutation_slot.admit()))
+        return [{"page": 1, "text": "Evidence about attention mechanisms."}]
+
+    monkeypatch.setattr(api.rag, "_extract_pdf", extract)
+    body = _multipart_upload(minimal_pdf())
+    headers = _upload_headers(body)
+
+    async def scenario():
+        first_receive_called = asyncio.Event()
+        release_first = asyncio.Event()
+
+        async def first_receive():
+            first_receive_called.set()
+            await release_first.wait()
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        first_messages = []
+
+        async def first_send(message):
+            first_messages.append(message)
+
+        first = asyncio.create_task(api.app(_scope("POST", "/papers/upload", headers), first_receive, first_send))
+        await asyncio.wait_for(first_receive_called.wait(), 10)
+        assert api.mutation_slot.in_use == 1
+
+        second_messages = []
+
+        async def second_receive():
+            pytest.fail("A refused upload must never read its body")
+
+        async def second_send(message):
+            second_messages.append(message)
+
+        await api.app(_scope("POST", "/papers/upload", headers), second_receive, second_send)
+        assert second_messages[0]["status"] == 429
+        assert dict(second_messages[0]["headers"])[b"retry-after"] == b"5"
+        assert json.loads(second_messages[1]["body"])["detail"]["category"] == "busy"
+        assert api.mutation_slot.in_use == 1
+
+        release_first.set()
+        await asyncio.wait_for(first, 30)
+        return first_messages
+
+    messages = asyncio.run(scenario())
+    assert messages[0]["status"] == 200, messages
+    assert seen_in_worker == [(1, None)]
+    assert api.mutation_slot.in_use == 0
+
+
+def test_parse_failure_oversize_and_disconnect_release_the_upload_admission(monkeypatch):
+    _fresh_demo(monkeypatch)
+    monkeypatch.setattr(api.rag, "ingest_paper", lambda *_: pytest.fail("Nothing to ingest on these paths"))
+
+    async def call(headers, receive):
+        messages = []
+
+        async def send(message):
+            messages.append(message)
+
+        await api.app(_scope("POST", "/papers/upload", headers), receive, send)
+        return messages[0]["status"]
+
+    async def scenario():
+        garbage = b"this is not multipart"
+
+        async def garbage_receive():
+            return {"type": "http.request", "body": garbage, "more_body": False}
+
+        assert await call(_upload_headers(garbage), garbage_receive) == 400
+        assert api.mutation_slot.in_use == 0
+
+        async def disconnect():
+            return {"type": "http.disconnect"}
+
+        assert await call(_upload_headers(b"x" * 100), disconnect) == 400
+        assert api.mutation_slot.in_use == 0
+
+        monkeypatch.setattr(settings, "MAX_FILE_SIZE_MB", 1)
+        oversize = _multipart_upload(b"%PDF" + b"x" * (1024 * 1024 + 4096))
+
+        async def oversize_receive():
+            return {"type": "http.request", "body": oversize, "more_body": False}
+
+        assert await call(_upload_headers(oversize), oversize_receive) == 413
+        assert api.mutation_slot.in_use == 0
+
+    asyncio.run(scenario())
+
+
+def test_unauthorized_upload_takes_no_admission(monkeypatch):
+    _fresh_demo(monkeypatch)
+    admitted = []
+    real_admit = api.mutation_slot.admit
+    monkeypatch.setattr(api.mutation_slot, "admit", lambda: admitted.append(True) or real_admit())
+
+    async def scenario():
+        messages = []
+
+        async def receive():
+            pytest.fail("No body is read without a token")
+
+        async def send(message):
+            messages.append(message)
+
+        await api.app(_scope("POST", "/papers/upload", _upload_headers(b"x", authenticated=False)), receive, send)
+        return messages[0]["status"]
+
+    assert asyncio.run(scenario()) == 401
+    assert admitted == [] and api.mutation_slot.in_use == 0
 
 
 def test_rejected_and_failed_uploads_release_the_mutation_slot(client, monkeypatch):

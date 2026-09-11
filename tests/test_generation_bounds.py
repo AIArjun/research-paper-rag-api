@@ -1,5 +1,6 @@
 """Bounded provider construction and accounted generation; fake backends only."""
 
+import sys
 import threading
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ from app.config import settings
 from app.ledger import LedgerError
 from app.protection import AdmissionSlot
 from app.rag_engine import BackendUnavailableError, BudgetExhaustedError, GenerationError, RAGEngine
+from app.tokens import FRAMING_TOKENS
 from tests.conftest import AUTH_HEADERS
 from tests.test_readiness_engine import fake_modules, real_configuration  # noqa: F401 (fixtures)
 
@@ -36,12 +38,12 @@ def client(monkeypatch):
 
 # ─── Bounded clients ───
 
-@pytest.mark.parametrize("provider,expected", [
-    ("openai", {"timeout": 30, "max_retries": 0, "max_tokens": 400, "model": "fake-test-model"}),
-    ("ollama", {"num_predict": 400, "client_kwargs": {"timeout": 30}, "model": "fake-test-model"}),
+@pytest.mark.parametrize("provider,expected,token_bound", [
+    ("openai", {"timeout": 30, "max_retries": 0, "max_tokens": 400, "model": "fake-test-model"}, "tiktoken/fake_base"),
+    ("ollama", {"num_predict": 400, "client_kwargs": {"timeout": 30}, "model": "fake-test-model"}, "utf8-bytes"),
 ])
 def test_every_supported_provider_is_constructed_with_explicit_bounds(
-    monkeypatch, real_configuration, fake_modules, provider, expected
+    monkeypatch, real_configuration, fake_modules, provider, expected, token_bound
 ):
     monkeypatch.setattr(settings, "LLM_PROVIDER", provider)
     engine = RAGEngine()
@@ -49,6 +51,79 @@ def test_every_supported_provider_is_constructed_with_explicit_bounds(
         assert engine._llm.configuration[key] == value
     assert engine.get_readiness()["ready"] is True
     assert engine.get_budget_status()["state"] == "ok"
+    assert engine.get_budget_status()["token_bound"] == token_bound
+
+
+@pytest.mark.parametrize("provider,question", [
+    ("openai", "What is the evidence? 🙂 日本語"),
+    ("ollama", "Wie funktioniert Aufmerksamkeit? 🙂 日本語"),
+])
+def test_reservations_come_from_the_model_bound_not_a_character_heuristic(
+    monkeypatch, real_configuration, fake_modules, provider, question
+):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", provider)
+    monkeypatch.setattr(settings, "LLM_MAX_OUTPUT_TOKENS", 123)
+    engine = _evidence_engine()
+    prompts = []
+
+    def capture(prompt):
+        prompts.append(prompt)
+        return "an answer"
+
+    engine._llm = SimpleNamespace(invoke=capture)
+    usage = engine.query(question)["model_usage"]
+    prompt = prompts[0]
+    if provider == "openai":
+        assert usage["tokens_reserved"] == len(prompt) + FRAMING_TOKENS + 123  # fake encoding: one token per character
+        assert usage["reservation_bound"] == "tiktoken/fake_base"
+    else:
+        assert usage["tokens_reserved"] == len(prompt.encode("utf-8")) + FRAMING_TOKENS + 123
+        assert usage["reservation_bound"] == "utf8-bytes"
+        assert usage["tokens_reserved"] > len(prompt) + FRAMING_TOKENS + 123  # non-ASCII bytes count
+    assert usage["tokens_reserved"] > len(prompt) // 3 + 1 + 123
+    assert engine._ledger.summary()["tokens_charged_total"] == usage["tokens_reserved"]
+
+
+def test_an_openai_model_without_a_tiktoken_encoding_fails_closed_before_loading_backends(
+    monkeypatch, real_configuration, fake_modules
+):
+    monkeypatch.setattr(settings, "LLM_MODEL", "unmapped-model")
+    monkeypatch.setattr(fake_modules["langchain_huggingface"], "HuggingFaceEmbeddings",
+                        lambda **_: pytest.fail("No backend is loaded without a token bound"))
+    engine = RAGEngine()
+    state = engine.get_readiness()
+    assert state["init_error"] == "token_bound_unavailable" and state["ready"] is False
+    assert engine._llm is None and engine._ledger is None and engine._token_bound is None
+    assert engine.get_budget_status()["token_bound"] is None
+    with pytest.raises(BackendUnavailableError) as error:
+        engine.query("A question")
+    assert error.value.category == "token_bound_unavailable"
+
+
+def test_missing_tiktoken_is_a_missing_dependency_for_openai_only(monkeypatch, real_configuration, fake_modules):
+    monkeypatch.setitem(sys.modules, "tiktoken", None)
+    engine = RAGEngine()
+    assert engine.get_readiness()["init_error"] == "missing_dependency"
+    assert engine._ledger is None
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "ollama")
+    assert RAGEngine().get_readiness()["ready"] is True
+
+
+def test_a_measured_overshoot_is_charged_and_logged_without_content(
+    monkeypatch, real_configuration, fake_modules, caplog
+):
+    monkeypatch.setattr(settings, "MAX_MODEL_TOKENS_PER_DAY", 90500)
+    monkeypatch.setattr(settings, "MAX_MODEL_TOKENS_TOTAL", 90500)
+    engine = _evidence_engine()
+    engine._llm = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(
+        content="answer", usage_metadata={"input_tokens": 90000, "output_tokens": 10, "total_tokens": 90010},
+    ))
+    usage = engine.query("What is the evidence?", request_id="overshoot")["model_usage"]
+    assert usage["tokens_charged"] == 90010 > usage["tokens_reserved"]
+    assert "exceeded the reservation" in caplog.text and "Evidence" not in caplog.text
+    assert engine._ledger.summary()["tokens_charged_total"] == 90010
+    with pytest.raises(BudgetExhaustedError):
+        engine.query("Another question?")
 
 
 def test_configured_bounds_flow_into_the_client(monkeypatch, real_configuration, fake_modules):
@@ -102,7 +177,9 @@ def test_real_generation_stays_disabled_until_every_allowance_is_explicit(
     assert state["init_error"] == "budget_not_configured" and state["ready"] is False
     assert state["effective_generation"] == "unavailable"
     assert engine._llm is None and engine._ledger is None
-    assert engine.get_budget_status() == {"state": "not_configured", "configured": False, "usage": None}
+    assert engine.get_budget_status() == {
+        "state": "not_configured", "configured": False, "usage": None, "token_bound": None,
+    }
     with pytest.raises(BackendUnavailableError) as error:
         engine.query("A question")
     assert error.value.category == "budget_not_configured"
@@ -113,7 +190,9 @@ def test_demo_mode_ignores_budget_settings(monkeypatch):
     monkeypatch.setattr(settings, "MODEL_CALL_LEDGER_PATH", "")
     engine = RAGEngine()
     assert engine.get_readiness()["ready"] is True
-    assert engine.get_budget_status() == {"state": "not_applicable", "configured": False, "usage": None}
+    assert engine.get_budget_status() == {
+        "state": "not_applicable", "configured": False, "usage": None, "token_bound": None,
+    }
 
 
 def test_an_unusable_ledger_fails_closed_before_loading_backends(monkeypatch, real_configuration, fake_modules, tmp_path):
@@ -228,6 +307,25 @@ def test_an_exhausted_allowance_makes_zero_further_provider_calls(monkeypatch, r
     assert engine._ledger.summary()["calls_total"] == 2
 
 
+def test_a_truncated_ledger_fails_closed_on_restart_instead_of_replenishing(
+    monkeypatch, real_configuration, fake_modules, tmp_path
+):
+    """Review probe at engine level: no fresh budget after the ledger file is truncated."""
+    monkeypatch.setattr(settings, "MAX_MODEL_CALLS_TOTAL", 1)
+    first = _evidence_engine()
+    first.query("Only call?")
+    assert first._llm.calls == 1
+    (tmp_path / "ledger.sqlite3").write_bytes(b"")
+    restarted = RAGEngine()
+    assert restarted.get_readiness()["init_error"] == "ledger_unavailable"
+    assert restarted.get_budget_status()["state"] == "unavailable"
+    with pytest.raises(BackendUnavailableError) as error:
+        restarted.query("Second call?")
+    assert error.value.category == "ledger_unavailable"
+    assert restarted._llm is None
+    assert (tmp_path / "ledger.sqlite3").stat().st_size == 0
+
+
 def test_exhaustion_survives_an_engine_restart_on_the_same_ledger(monkeypatch, real_configuration, fake_modules):
     monkeypatch.setattr(settings, "MAX_MODEL_CALLS_TOTAL", 1)
     first = _evidence_engine()
@@ -308,7 +406,7 @@ def test_query_response_exposes_safe_usage_metadata(client, monkeypatch):
     assert response.status_code == 200
     assert response.json()["model_usage"] == {
         "accounting": "measured", "input_tokens": 10, "output_tokens": 5,
-        "tokens_charged": 15, "tokens_reserved": 700, "context_chars": 120,
+        "tokens_charged": 15, "tokens_reserved": 700, "context_chars": 120, "reservation_bound": None,
     }
 
 

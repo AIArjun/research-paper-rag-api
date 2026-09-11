@@ -11,15 +11,21 @@ BEGIN IMMEDIATE transaction, so concurrent threads (or processes sharing the
 same file) cannot both pass an allowance check for the last remaining call.
 
 Fail closed: a missing directory, unreadable, uninitialized, corrupt or
-incompatible database raises LedgerError. Nothing is ever reset silently.
+incompatible database raises LedgerError. Nothing is ever reset silently. An
+existing zero-byte file is refused as truncated history rather than treated
+as a fresh database; a genuinely new ledger is created only when the path
+does not exist, by staging the schema in a private file and publishing it
+under the final name with an exclusive link.
 
 The ledger bounds the number of attempted calls and charged tokens. It is not
 a dollar cap: money follows the provider's price list, which this file does
 not know. It also needs durable storage; an ephemeral filesystem can lose it.
 """
 
+import os
+import secrets
 import sqlite3
-from contextlib import closing
+from contextlib import closing, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -102,18 +108,52 @@ class ModelCallLedger:
         location = Path(self._path)
         if not location.parent.is_dir():
             raise LedgerError("The ledger directory does not exist.")
-        if location.exists() and not location.is_file():
-            raise LedgerError("The ledger path is not a regular file.")
-        # A zero-byte file carries no history, so initializing it loses nothing.
-        has_history = location.is_file() and location.stat().st_size > 0
+        if location.exists():
+            if not location.is_file():
+                raise LedgerError("The ledger path is not a regular file.")
+            if location.stat().st_size == 0:
+                # Truncated history, or a crash before the first commit: never
+                # reinitialize in place, because that would replenish the budget.
+                raise LedgerError("The ledger file exists but is empty; refusing to reinitialize it.")
+            self._verify_existing()
+            return
+        if not self._create_new_database():
+            # Another process published the file first; verify what it wrote.
+            self._verify_existing()
+
+    def _verify_existing(self) -> None:
         try:
-            with closing(self._connect("rw" if has_history else "rwc")) as connection:
-                if has_history:
-                    self._verify_schema(connection)
-                else:
-                    self._initialize_schema(connection)
+            with closing(self._connect("rw")) as connection:
+                self._verify_schema(connection)
         except sqlite3.Error as error:
             raise LedgerError("The ledger could not be opened.") from error
+
+    def _create_new_database(self) -> bool:
+        """Deliberate first initialization of a path that does not exist yet.
+
+        The schema is built in a private staging file and then published under
+        the final name with an exclusive hard link, so the ledger path never
+        exists without a complete schema and two processes cannot both create
+        it. Returns False when the final path appeared in the meantime.
+        """
+        staging = Path(f"{self._path}.init-{os.getpid()}-{secrets.token_hex(4)}")
+        try:
+            try:
+                with closing(sqlite3.connect(str(staging), timeout=self._busy_timeout,
+                                             isolation_level=None)) as connection:
+                    self._initialize_schema(connection)
+            except sqlite3.Error as error:
+                raise LedgerError("The ledger could not be created.") from error
+            try:
+                os.link(staging, self._path)
+            except FileExistsError:
+                return False
+            except OSError as error:
+                raise LedgerError("The ledger could not be published at its path.") from error
+            return True
+        finally:
+            with suppress(FileNotFoundError):
+                staging.unlink()
 
     def _initialize_schema(self, connection: sqlite3.Connection) -> None:
         connection.execute("BEGIN IMMEDIATE")

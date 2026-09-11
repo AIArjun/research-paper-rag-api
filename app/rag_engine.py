@@ -32,6 +32,7 @@ from typing import Optional
 from app.config import settings
 from app.diagnostics import log_safe_error
 from app.ledger import BudgetExhaustedError, LedgerError, ModelCallLedger
+from app.tokens import TokenBound, TokenBoundError, token_bound_for
 
 logger = logging.getLogger("rag-api.engine")
 
@@ -81,11 +82,6 @@ def _safe_attribute(value: object, name: str) -> object:
         return getattr(value, name, None)
     except Exception:
         return None
-
-
-def _estimate_tokens(text: str) -> int:
-    """Conservative reservation heuristic (about 3 characters per token); not a measurement."""
-    return len(text) // 3 + 1
 
 
 def _measured_usage(response: object) -> tuple[Optional[int], Optional[int]]:
@@ -147,6 +143,7 @@ class RAGEngine:
         self._embeddings = None
         self._llm = None
         self._ledger: Optional[ModelCallLedger] = None
+        self._token_bound: Optional[TokenBound] = None
         self._initialize()
 
     def _initialize(self):
@@ -155,6 +152,7 @@ class RAGEngine:
         self._vectorstore = None
         self._llm = None
         self._ledger = None
+        self._token_bound = None
         self._init_error = None
         try:
             settings.validate()
@@ -181,6 +179,20 @@ class RAGEngine:
             self._ledger = ModelCallLedger(settings.MODEL_CALL_LEDGER_PATH, allowances)
         except LedgerError as error:
             self._init_error = "ledger_unavailable"
+            log_safe_error(logger, self._init_error, error.__cause__ or error)
+            return
+        # Every reservation needs a model-supported upper bound; resolve it before
+        # loading any heavy backend so an unsupported model fails closed cheaply.
+        try:
+            self._token_bound = token_bound_for(self._configured_provider, self._configured_model)
+        except ImportError as error:
+            self._init_error = "missing_dependency"
+            self._ledger = None
+            log_safe_error(logger, self._init_error, error)
+            return
+        except TokenBoundError as error:
+            self._init_error = "token_bound_unavailable"
+            self._ledger = None
             log_safe_error(logger, self._init_error, error.__cause__ or error)
             return
 
@@ -216,6 +228,7 @@ class RAGEngine:
             self._vectorstore = None
             self._llm = None
             self._ledger = None
+            self._token_bound = None
             log_safe_error(logger, self._init_error, initialization_error)
 
     def _init_llm(self):
@@ -262,7 +275,8 @@ class RAGEngine:
                 retrieval = "chroma" if vector_ready else "unavailable"
                 generation = (
                     self._configured_provider
-                    if self._llm is not None and self._ledger is not None else "unavailable"
+                    if self._llm is not None and self._ledger is not None and self._token_bound is not None
+                    else "unavailable"
                 )
             else:
                 retrieval = "chroma" if vector_ready else "memory-keyword"
@@ -297,7 +311,11 @@ class RAGEngine:
             provider = self._configured_provider
             ledger = self._ledger
             init_error = self._init_error
-        status = {"state": "not_applicable", "configured": False, "usage": None}
+            bound = self._token_bound
+        status = {
+            "state": "not_applicable", "configured": False, "usage": None,
+            "token_bound": bound.name if bound is not None else None,
+        }
         if not (isinstance(provider, str) and provider in {"openai", "ollama"}):
             return status
         if ledger is None:
@@ -322,6 +340,8 @@ class RAGEngine:
                     raise BackendUnavailableError()
                 if self._ledger is None:
                     raise BackendUnavailableError("budget_not_configured")
+                if self._token_bound is None:
+                    raise BackendUnavailableError("token_bound_unavailable")
 
     def _extract_pdf(self, pdf_bytes: bytes) -> list[dict]:
         """Extract text from PDF, page by page, after checking the page ceiling."""
@@ -673,11 +693,14 @@ class RAGEngine:
         with self._state_lock:
             ledger = self._ledger
             llm = self._llm
+            bound = self._token_bound
             provider = self._configured_provider
             model = self._configured_model
         if ledger is None:
             # Never call a model whose usage cannot be accounted for.
             raise BackendUnavailableError("budget_not_configured")
+        if bound is None:
+            raise BackendUnavailableError("token_bound_unavailable")
         context = self._build_context(passages, max_context_chars)
         prompt = (
             "You are a research assistant. Answer the question based ONLY on the "
@@ -690,7 +713,8 @@ class RAGEngine:
         max_output_tokens = settings.LLM_MAX_OUTPUT_TOKENS
         if type(max_output_tokens) is not int or max_output_tokens < 1:
             raise BackendUnavailableError("invalid_configuration")
-        reserved_tokens = _estimate_tokens(prompt) + max_output_tokens
+        # An explicit model-supported upper bound (never a character heuristic).
+        reserved_tokens = bound.reservation(prompt, max_output_tokens)
         # The reservation counts even if the provider fails, times out or hangs.
         call_id = ledger.reserve(str(provider), str(model), reserved_tokens, request_id)
         try:
@@ -707,6 +731,13 @@ class RAGEngine:
         input_tokens, output_tokens = _measured_usage(response)
         self._settle(ledger, call_id, "succeeded", input_tokens, output_tokens)
         measured = input_tokens is not None
+        if measured and input_tokens + output_tokens > reserved_tokens:
+            # The bound was not an upper bound for this model; the ledger charges
+            # the larger measured total so later calls see the overshoot.
+            logger.warning(
+                "[%s] Measured usage %d exceeded the reservation %d (bound=%s)",
+                request_id, input_tokens + output_tokens, reserved_tokens, bound.name,
+            )
         model_usage = {
             "accounting": "measured" if measured else "reserved",
             "input_tokens": input_tokens,
@@ -715,6 +746,7 @@ class RAGEngine:
             else reserved_tokens,
             "tokens_reserved": reserved_tokens,
             "context_chars": len(context),
+            "reservation_bound": bound.name,
         }
         return answer, str(model), model_usage
 

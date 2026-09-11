@@ -16,6 +16,12 @@ WORKDIR /app
 COPY requirements-real.lock.txt ./
 RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-real.lock.txt && pip check
 
+# Cache the tiktoken encodings used for pre-call token reservations (gpt-4o and
+# gpt-4/3.5 families) at build time; the runtime has no network and fails closed
+# without them.
+ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken
+RUN python -c "import tiktoken; tiktoken.get_encoding('o200k_base'); tiktoken.get_encoding('cl100k_base')"
+
 # Pin the model revision and fetch only its safe tensor weights and tokenizer/config files.
 # This download is build-time only; runtime needs no Hugging Face credentials or network.
 RUN python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='sentence-transformers/all-MiniLM-L6-v2', revision='1110a243fdf4706b3f48f1d95db1a4f5529b4d41', local_dir='/opt/models/all-MiniLM-L6-v2', allow_patterns=['*.json', '*.txt', 'model.safetensors'])"
@@ -28,7 +34,7 @@ ENV EMBEDDING_MODEL=/opt/models/all-MiniLM-L6-v2 \
     PORT=8001
 
 RUN useradd --uid 10001 --create-home app && \
-    mkdir -p /app/vectorstore /app/uploads && chown -R app:app /app /opt/models
+    mkdir -p /app/vectorstore /app/uploads && chown -R app:app /app /opt/models /opt/tiktoken
 COPY --chown=app:app app ./app
 USER app
 EXPOSE 8001

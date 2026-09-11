@@ -36,7 +36,9 @@ from app.rag_engine import (
 )
 from app.config import settings, MAX_QUESTION_CHARS, MAX_TOP_K, MAX_FILENAME_CHARS, RETRY_AFTER_SECONDS
 from app.diagnostics import log_safe_error
-from app.protection import AccessTokenMiddleware, RequestBodyLimitMiddleware, AdmissionSlot
+from app.protection import (
+    AccessTokenMiddleware, AdmissionMiddleware, RequestBodyLimitMiddleware, AdmissionSlot,
+)
 
 # ─── Logging ───
 logging.basicConfig(
@@ -107,8 +109,16 @@ def _body_limit_for_scope(scope: dict) -> int:
     return limits.max_json_body_bytes
 
 
-# ─── Middleware (last added is outermost: CORS → access token → body limit → app) ───
+def _is_upload_request(scope: dict) -> bool:
+    return scope.get("method") == "POST" and scope.get("path") == "/papers/upload"
+
+
+# ─── Middleware (last added is outermost: CORS → access token → upload admission → body limit → app) ───
 app.add_middleware(RequestBodyLimitMiddleware, limit_for_scope=_body_limit_for_scope)
+# Uploads take the single mutation slot before any body byte is received; the
+# slot resolver is a callable so a replaced module-level slot is honored.
+app.add_middleware(AdmissionMiddleware, slot=lambda: mutation_slot, matches=_is_upload_request,
+                   retry_after=RETRY_AFTER_SECONDS)
 app.add_middleware(AccessTokenMiddleware, configured_token=lambda: settings.DEMO_ACCESS_TOKEN)
 
 
@@ -273,12 +283,13 @@ class Citation(BaseModel):
 
 
 class ModelUsage(BaseModel):
-    accounting: str  # "measured" (provider reported) or "reserved" (conservative estimate)
+    accounting: str  # "measured" (provider reported) or "reserved" (pre-call upper bound)
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     tokens_charged: int
     tokens_reserved: int
     context_chars: int
+    reservation_bound: Optional[str] = None  # e.g. "tiktoken/o200k_base" or "utf8-bytes"
 
 
 class QueryResponse(BaseModel):
@@ -451,7 +462,9 @@ async def upload_paper(
     3. Embedded (converted to vectors)
     4. Stored (indexed in ChromaDB for retrieval)
 
-    One upload is processed at a time; a busy demo answers 429 with Retry-After.
+    One upload is admitted at a time. The admission is taken by the middleware
+    before the multipart body is received, so a busy demo answers 429 before
+    any bytes are read; the same admission is handed to the worker thread here.
     """
     request_id = _request_id(request)
     try:
@@ -467,9 +480,12 @@ async def upload_paper(
     if file.content_type and file.content_type != "application/pdf":
         raise _error(400, "The file part must be sent as application/pdf.", "invalid_content_type", request_id)
 
-    admission = mutation_slot.admit()
+    admission = getattr(request.state, "admission", None)
     if admission is None:
-        raise _busy(request_id)
+        # Defensive only: the middleware admits before the body is parsed.
+        admission = mutation_slot.admit()
+        if admission is None:
+            raise _busy(request_id)
     start = time.time()
     try:
         contents = await _read_bounded_upload(file, limits.max_file_bytes, request_id)

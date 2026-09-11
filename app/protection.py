@@ -13,6 +13,9 @@ worker:
   worker thread stays held until that thread finishes, even if the awaiting
   request is cancelled; a thread cannot be interrupted, so the slot must not
   be freed early either.
+- AdmissionMiddleware admits an upload before a single body byte is received,
+  because FastAPI parses and spools a multipart body before any route code
+  runs. A refused upload gets 429 without receive() ever being called.
 """
 
 import hmac
@@ -191,6 +194,43 @@ class RequestBodyLimitMiddleware:
             if response_started:
                 raise
             await _send_json(send, 413, {"detail": error.detail})
+
+
+class AdmissionMiddleware:
+    """Admit matching requests into a slot before the body is received.
+
+    The admission travels to the route in scope["state"]["admission"]; the
+    route transfers it to its worker thread. Whichever side finishes last
+    releases the slot: this middleware's release is a no-op once a worker is
+    running, and it is what frees the slot after a parse failure, an oversize
+    body, a validation error, a disconnect or a cancellation before dispatch.
+    """
+
+    def __init__(self, app, slot: Callable[[], "AdmissionSlot"], matches: Callable[[dict], bool],
+                 retry_after: int = 5):
+        self.app = app
+        self._slot = slot
+        self._matches = matches
+        self._retry_after = retry_after
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not self._matches(scope):
+            await self.app(scope, receive, send)
+            return
+        request_id = (scope.get("state") or {}).get("request_id")
+        admission = self._slot().admit()
+        if admission is None:
+            await _send_json(send, 429, {"detail": {
+                "message": "The demo is busy with another request. Retry shortly.",
+                "category": "busy",
+                "request_id": request_id,
+            }}, headers=[(b"retry-after", str(self._retry_after).encode("ascii"))])
+            return
+        scope.setdefault("state", {})["admission"] = admission
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            admission.release()
 
 
 class AdmissionSlot:

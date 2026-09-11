@@ -145,15 +145,78 @@ def test_unusable_ledgers_fail_closed_without_being_reset(tmp_path, corruption):
         assert path.read_bytes() == before
 
 
-def test_existing_empty_file_is_initialized_but_history_is_verified(tmp_path):
+def test_existing_empty_ledger_file_is_refused_not_reinitialized(tmp_path):
     path = tmp_path / "ledger.sqlite3"
     path.write_bytes(b"")
+    with pytest.raises(LedgerError, match="empty"):
+        ModelCallLedger(str(path), allowances())
+    assert path.read_bytes() == b""
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["ledger.sqlite3"]
+
+
+def test_truncated_ledger_cannot_replenish_the_budget(tmp_path):
+    """Review probe: one reserved call against a total allowance of one, then truncation."""
+    path = tmp_path / "ledger.sqlite3"
+    ledger = ModelCallLedger(str(path), allowances(calls_total=1))
+    ledger.reserve("openai", "fake-model", 10, "only-call")
+    with pytest.raises(BudgetExhaustedError):
+        ledger.reserve("openai", "fake-model", 10, "refused")
+    path.write_bytes(b"")
+    with pytest.raises(LedgerError):
+        ModelCallLedger(str(path), allowances(calls_total=1))
+    assert path.stat().st_size == 0
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["ledger.sqlite3"]
+    # A header-only remnant of the file is refused the same way.
+    path.write_bytes(b"SQLite format 3\x00")
+    with pytest.raises(LedgerError):
+        ModelCallLedger(str(path), allowances(calls_total=1))
+
+
+def test_first_initialization_is_deliberate_and_leaves_no_staging_file(tmp_path):
+    path = tmp_path / "fresh.sqlite3"
     ledger = ModelCallLedger(str(path), allowances())
-    ledger.reserve("openai", "fake-model", 10, "first")
+    assert path.stat().st_size > 0
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["fresh.sqlite3"]
     with sqlite3.connect(path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM model_calls").fetchone()[0] == 1
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {"ledger_meta", "model_calls"} <= tables
+    assert ledger.summary()["ledger_created_at"]
+    ledger.reserve("openai", "fake-model", 10, "first")
+    # A normal restart verifies the existing file and keeps its history.
     assert ModelCallLedger(str(path), allowances()).summary()["calls_total"] == 1
+    # Publishing again is refused once the path exists, and leaves the data untouched.
+    assert ledger._create_new_database() is False
+    assert ModelCallLedger(str(path), allowances()).summary()["calls_total"] == 1
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["fresh.sqlite3"]
+
+
+def test_concurrent_first_initialization_publishes_exactly_one_ledger(tmp_path):
+    path = tmp_path / "raced.sqlite3"
+    start = threading.Barrier(8, timeout=10)
+    outcomes = []
+    lock = threading.Lock()
+
+    def open_and_reserve(index):
+        start.wait()
+        try:
+            ModelCallLedger(str(path), allowances(calls_per_day=50, calls_total=50)).reserve(
+                "openai", "fake-model", 1, f"race-{index}"
+            )
+            outcome = "ok"
+        except LedgerError:
+            outcome = "error"
+        with lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=open_and_reserve, args=(index,)) for index in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    assert outcomes == ["ok"] * 8
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["raced.sqlite3"]
+    assert ModelCallLedger(str(path), allowances(calls_per_day=50, calls_total=50)).summary()["calls_total"] == 8
 
 
 def test_ledger_rows_hold_no_prompt_text_and_bound_identifiers(tmp_path):

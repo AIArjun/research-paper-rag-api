@@ -11,6 +11,7 @@ from app.config import BudgetAllowances, settings
 from app.ledger import ModelCallLedger
 from app.protection import AdmissionSlot
 from app.rag_engine import LimitExceededError, RAGEngine
+from app.tokens import ByteLengthBound
 from tests.conftest import AUTH_HEADERS, minimal_pdf, multi_page_pdf
 from tests.test_rag_foundation import FakeVectorStore
 
@@ -164,6 +165,7 @@ def test_prompt_context_honors_the_configured_ceiling(engine, monkeypatch, tmp_p
     monkeypatch.setattr(engine, "_extract_pdf", lambda _: [{"page": 2, "text": "evidence " * 800}])
     engine.ingest_paper(b"paper", "paper.pdf")
     engine._ledger = ModelCallLedger(str(tmp_path / "ledger.sqlite3"), BudgetAllowances(5, 5, 100000, 100000))
+    engine._token_bound = ByteLengthBound()
     prompts = []
 
     class FakeModel:

@@ -24,7 +24,7 @@ Environment variable names (values are examples, never real secrets):
 | `MODEL_CALL_LEDGER_PATH` | SQLite ledger file on durable storage; required for real providers | `/var/data/model-calls.sqlite3` |
 | `MAX_MODEL_CALLS_PER_DAY`, `MAX_MODEL_CALLS_TOTAL`, `MAX_MODEL_TOKENS_PER_DAY`, `MAX_MODEL_TOKENS_TOTAL` | Call and token allowances; real generation stays disabled until all four are positive | `20`, `100`, `40000`, `200000` |
 
-Fixed request bounds: questions up to 2000 characters, `top_k` at most 5, JSON bodies at most 32 KiB (enough for a 2000-character question in any escaped encoding), upload requests at most the file ceiling plus a 16 KiB multipart allowance. Total request bytes are enforced at the ASGI receive boundary, so a missing or misleading `Content-Length` cannot bypass them. Over-limit uploads answer 413 (size, pages, chunks) or 409 (paper count, corpus capacity) before embeddings or storage. A busy demo answers 429 with `Retry-After`. Every attempted real-model call is reserved in the ledger before the provider is contacted and stays counted if it fails or times out; abstentions consume nothing; an exhausted allowance answers 429 with no provider call. These ceilings bound usage; they are not a verified dollar cap. The demo must run as one worker on one instance.
+Fixed request bounds: questions up to 2000 characters, `top_k` at most 5, JSON bodies at most 32 KiB (enough for a 2000-character question in any escaped encoding), upload requests at most the file ceiling plus a 16 KiB multipart allowance. Total request bytes are enforced at the ASGI receive boundary, so a missing or misleading `Content-Length` cannot bypass them. Over-limit uploads answer 413 (size, pages, chunks) or 409 (paper count, corpus capacity) before embeddings or storage. Only one upload is admitted at a time, and the admission is taken before any body byte is received, so a second simultaneous upload answers 429 with `Retry-After` without being read. Every attempted real-model call is reserved in the ledger before the provider is contacted, using an explicit model-supported token bound (the exact tiktoken count plus framing and the output cap for OpenAI models; UTF-8 bytes for Ollama), and stays counted if it fails or times out; abstentions consume nothing; an exhausted allowance answers 429 with no provider call. An existing empty ledger file is refused rather than reinitialized. These ceilings bound usage; they are not a verified dollar cap. The demo must run as one worker on one instance.
 
 Run it locally in demo mode:
 
@@ -223,12 +223,12 @@ export LLM_PROVIDER=demo
 ## Running Tests
 
 ```bash
-pip install -r requirements-deploy.txt pytest httpx reportlab
+pip install -r requirements-deploy.txt pytest httpx reportlab "tiktoken==0.14.0"
 export LLM_PROVIDER=demo
 pytest tests/ -v
 ```
 
-CI runs deterministic demo/fake-backend tests on Python 3.11, matching Docker, and builds/smoke-tests the demo image with an explicit fake access token. The suite sets its own fake token in `tests/conftest.py`. These checks do not establish real-provider compatibility or end-to-end model accuracy.
+CI runs deterministic demo/fake-backend tests on Python 3.11, matching Docker, and builds/smoke-tests the demo image with an explicit fake access token. The suite sets its own fake token in `tests/conftest.py`. The token-bound tests use the real pinned tiktoken encoding (downloaded once on the CI runner, baked into the real image). These checks do not establish real-provider compatibility or end-to-end model accuracy.
 
 ---
 
