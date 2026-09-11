@@ -16,6 +16,18 @@ os.environ.setdefault("OPENAI_API_KEY", "")
 os.environ.setdefault("ALLOWED_ORIGINS", "")
 
 
+class CharacterBound:
+    """Test-only token bound: one token per character plus the output cap."""
+
+    name = "test/one-token-per-character"
+
+    def count(self, text: str) -> int:
+        return len(text)
+
+    def reservation(self, prompt: str, max_output_tokens: int) -> int:
+        return len(prompt) + max_output_tokens
+
+
 def multi_page_pdf(pages: int, lines_per_page: int = 3) -> bytes:
     """A small text PDF with the requested number of pages (reportlab, or pypdf blank pages)."""
     buffer = io.BytesIO()

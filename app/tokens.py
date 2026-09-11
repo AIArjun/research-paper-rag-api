@@ -4,21 +4,24 @@ Model-supported token bounds
 A pre-call reservation must never be smaller than what the provider can bill
 for that call. A character heuristic cannot promise that: emoji, CJK and other
 non-ASCII text tokenize to far more than one token per three characters. The
-reservation is therefore computed from an explicit bound per provider:
+reservation is therefore computed only from an explicit, model-supported bound:
 
 - OpenAI chat models: the exact encoding tiktoken maps to the configured model
   (o200k_base for the gpt-4o family), plus a fixed framing margin for the chat
   message envelope, plus the configured output cap that the provider enforces
-  through ``max_tokens``.
-- Ollama: the UTF-8 byte length of the prompt. Byte-level BPE tokenizers and
-  SentencePiece tokenizers with byte fallback (Llama 3, Mistral) never emit
-  more tokens than input bytes, so bytes are a demonstrable upper bound; real
-  usage is much lower and no measured usage is reported on that path.
+  through ``max_tokens``. The request carries exactly the prompt built here,
+  so counting that prompt bounds the billed input.
+- Ollama: no supported bound. The server wraps the supplied prompt in the
+  model's Modelfile TEMPLATE and SYSTEM text (https://docs.ollama.com/modelfile),
+  which this demo cannot see, count or bound from the client side, and the
+  ``raw`` mode of https://docs.ollama.com/api/generate is not used here. Until
+  a model/template-specific bound exists, Ollama fails closed as
+  ``token_bound_unavailable`` and no local model is ever invoked.
 
 An OpenAI model that tiktoken cannot map, an encoding that cannot be loaded
 (for example offline without the build-time cache) or a missing tiktoken
-package fails closed: the engine reports the category and never calls the
-provider.
+package fails closed the same way: the engine reports the category and never
+calls the provider.
 """
 
 from typing import Protocol
@@ -65,22 +68,13 @@ class TiktokenBound:
         return self.count(prompt) + FRAMING_TOKENS + max_output_tokens
 
 
-class ByteLengthBound:
-    """UTF-8 bytes as an upper bound for byte-level tokenizers (Ollama models)."""
-
-    name = "utf8-bytes"
-
-    def count(self, text: str) -> int:
-        return len(text.encode("utf-8"))
-
-    def reservation(self, prompt: str, max_output_tokens: int) -> int:
-        return self.count(prompt) + FRAMING_TOKENS + max_output_tokens
-
-
 def token_bound_for(provider: str, model: str) -> TokenBound:
-    """Resolve the bound for a supported provider; anything else fails closed."""
+    """Resolve the bound for a supported provider; every other configuration fails closed."""
     if provider == "openai":
         return TiktokenBound(model)
     if provider == "ollama":
-        return ByteLengthBound()
+        raise TokenBoundError(
+            "Ollama applies a server-side Modelfile TEMPLATE/SYSTEM outside the supplied "
+            "prompt, so the input cannot be bounded from this client; unsupported."
+        )
     raise TokenBoundError("No token bound is defined for this provider.")

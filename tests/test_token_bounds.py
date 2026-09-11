@@ -11,9 +11,7 @@ import pytest
 tiktoken = pytest.importorskip("tiktoken")
 
 from app.config import MAX_QUESTION_CHARS  # noqa: E402
-from app.tokens import (  # noqa: E402
-    FRAMING_TOKENS, ByteLengthBound, TiktokenBound, TokenBoundError, token_bound_for,
-)
+from app.tokens import FRAMING_TOKENS, TiktokenBound, TokenBoundError, token_bound_for  # noqa: E402
 
 SAMPLES = [
     "What accuracy did the model achieve on the benchmark?",
@@ -52,8 +50,6 @@ def test_reservation_equals_the_exact_count_plus_framing_and_output_cap(encoding
     exact = len(encoding.encode(sample, disallowed_special=()))
     assert bound.count(sample) == exact
     assert bound.reservation(sample, 400) == exact + FRAMING_TOKENS + 400
-    # The byte bound used for Ollama dominates the real tokenizer on every sample.
-    assert ByteLengthBound().count(sample) >= exact
 
 
 def test_the_replaced_character_heuristic_under_reserved_non_ascii_text(encoding):
@@ -76,7 +72,6 @@ def test_worst_case_question_and_context_reservation_is_finite_and_covered(encod
     bound = TiktokenBound("gpt-4o-mini")
     reservation = bound.reservation(prompt, 400)
     assert reservation == len(encoding.encode(prompt)) + FRAMING_TOKENS + 400
-    assert reservation <= ByteLengthBound().reservation(prompt, 400)
 
 
 def test_unmapped_models_special_tokens_and_providers(encoding):
@@ -86,6 +81,9 @@ def test_unmapped_models_special_tokens_and_providers(encoding):
         TiktokenBound("   ")
     assert TiktokenBound("gpt-4o-mini").count("<|endoftext|>") > 0
     assert token_bound_for("openai", "gpt-4o-mini").name == "tiktoken/o200k_base"
-    assert token_bound_for("ollama", "llama3").name == "utf8-bytes"
+    # Ollama wraps the prompt in a server-side Modelfile TEMPLATE/SYSTEM: unsupported, fail closed.
+    for model in ("llama3", "mistral", "gpt-4o-mini"):
+        with pytest.raises(TokenBoundError, match="Modelfile"):
+            token_bound_for("ollama", model)
     with pytest.raises(TokenBoundError):
         token_bound_for("demo", "gpt-4o-mini")

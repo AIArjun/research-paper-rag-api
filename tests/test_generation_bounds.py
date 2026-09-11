@@ -38,30 +38,33 @@ def client(monkeypatch):
 
 # ─── Bounded clients ───
 
-@pytest.mark.parametrize("provider,expected,token_bound", [
-    ("openai", {"timeout": 30, "max_retries": 0, "max_tokens": 400, "model": "fake-test-model"}, "tiktoken/fake_base"),
-    ("ollama", {"num_predict": 400, "client_kwargs": {"timeout": 30}, "model": "fake-test-model"}, "utf8-bytes"),
-])
-def test_every_supported_provider_is_constructed_with_explicit_bounds(
-    monkeypatch, real_configuration, fake_modules, provider, expected, token_bound
-):
-    monkeypatch.setattr(settings, "LLM_PROVIDER", provider)
+def test_the_supported_provider_is_constructed_with_explicit_bounds(monkeypatch, real_configuration, fake_modules):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "openai")
     engine = RAGEngine()
-    for key, value in expected.items():
+    for key, value in {"timeout": 30, "max_retries": 0, "max_tokens": 400, "model": "fake-test-model"}.items():
         assert engine._llm.configuration[key] == value
     assert engine.get_readiness()["ready"] is True
     assert engine.get_budget_status()["state"] == "ok"
-    assert engine.get_budget_status()["token_bound"] == token_bound
+    assert engine.get_budget_status()["token_bound"] == "tiktoken/fake_base"
 
 
-@pytest.mark.parametrize("provider,question", [
-    ("openai", "What is the evidence? 🙂 日本語"),
-    ("ollama", "Wie funktioniert Aufmerksamkeit? 🙂 日本語"),
-])
+def test_ollama_fails_closed_as_an_unsupported_token_bound_configuration(monkeypatch, real_configuration, fake_modules):
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "ollama")
+    monkeypatch.setattr(fake_modules["langchain_ollama"], "OllamaLLM",
+                        lambda **_: pytest.fail("No Ollama client is constructed without a token bound"))
+    engine = RAGEngine()
+    assert engine.get_readiness()["init_error"] == "token_bound_unavailable"
+    assert engine.get_budget_status() == {
+        "state": "unavailable", "configured": False, "usage": None, "token_bound": None,
+    }
+    with pytest.raises(BackendUnavailableError) as error:
+        engine.query("A question")
+    assert error.value.category == "token_bound_unavailable"
+
+
 def test_reservations_come_from_the_model_bound_not_a_character_heuristic(
-    monkeypatch, real_configuration, fake_modules, provider, question
+    monkeypatch, real_configuration, fake_modules
 ):
-    monkeypatch.setattr(settings, "LLM_PROVIDER", provider)
     monkeypatch.setattr(settings, "LLM_MAX_OUTPUT_TOKENS", 123)
     engine = _evidence_engine()
     prompts = []
@@ -71,15 +74,10 @@ def test_reservations_come_from_the_model_bound_not_a_character_heuristic(
         return "an answer"
 
     engine._llm = SimpleNamespace(invoke=capture)
-    usage = engine.query(question)["model_usage"]
+    usage = engine.query("What is the evidence? 🙂 日本語")["model_usage"]
     prompt = prompts[0]
-    if provider == "openai":
-        assert usage["tokens_reserved"] == len(prompt) + FRAMING_TOKENS + 123  # fake encoding: one token per character
-        assert usage["reservation_bound"] == "tiktoken/fake_base"
-    else:
-        assert usage["tokens_reserved"] == len(prompt.encode("utf-8")) + FRAMING_TOKENS + 123
-        assert usage["reservation_bound"] == "utf8-bytes"
-        assert usage["tokens_reserved"] > len(prompt) + FRAMING_TOKENS + 123  # non-ASCII bytes count
+    assert usage["tokens_reserved"] == len(prompt) + FRAMING_TOKENS + 123  # fake encoding: one token per character
+    assert usage["reservation_bound"] == "tiktoken/fake_base"
     assert usage["tokens_reserved"] > len(prompt) // 3 + 1 + 123
     assert engine._ledger.summary()["tokens_charged_total"] == usage["tokens_reserved"]
 
@@ -100,13 +98,11 @@ def test_an_openai_model_without_a_tiktoken_encoding_fails_closed_before_loading
     assert error.value.category == "token_bound_unavailable"
 
 
-def test_missing_tiktoken_is_a_missing_dependency_for_openai_only(monkeypatch, real_configuration, fake_modules):
+def test_missing_tiktoken_is_a_missing_dependency(monkeypatch, real_configuration, fake_modules):
     monkeypatch.setitem(sys.modules, "tiktoken", None)
     engine = RAGEngine()
     assert engine.get_readiness()["init_error"] == "missing_dependency"
     assert engine._ledger is None
-    monkeypatch.setattr(settings, "LLM_PROVIDER", "ollama")
-    assert RAGEngine().get_readiness()["ready"] is True
 
 
 def test_a_measured_overshoot_is_charged_and_logged_without_content(

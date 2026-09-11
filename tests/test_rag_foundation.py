@@ -10,7 +10,7 @@ import pytest
 from app.config import BudgetAllowances, settings
 from app.ledger import ModelCallLedger
 from app.rag_engine import RAGEngine, StorageMutationError
-from app.tokens import ByteLengthBound
+from tests.conftest import CharacterBound
 
 
 @pytest.fixture
@@ -271,7 +271,7 @@ def test_generation_receives_full_evidence_but_returns_short_previews(vector_eng
     engine, store = vector_engine
     # Any injected model must be accounted for; an unaccounted model is never invoked.
     engine._ledger = ModelCallLedger(str(tmp_path / "ledger.sqlite3"), BudgetAllowances(5, 5, 100000, 100000))
-    engine._token_bound = ByteLengthBound()
+    engine._token_bound = CharacterBound()
     if backend == "demo":
         engine._vectorstore = None
         engine._embeddings = None

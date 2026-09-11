@@ -24,7 +24,7 @@ Environment variable names (values are examples, never real secrets):
 | `MODEL_CALL_LEDGER_PATH` | SQLite ledger file on durable storage; required for real providers | `/var/data/model-calls.sqlite3` |
 | `MAX_MODEL_CALLS_PER_DAY`, `MAX_MODEL_CALLS_TOTAL`, `MAX_MODEL_TOKENS_PER_DAY`, `MAX_MODEL_TOKENS_TOTAL` | Call and token allowances; real generation stays disabled until all four are positive | `20`, `100`, `40000`, `200000` |
 
-Fixed request bounds: questions up to 2000 characters, `top_k` at most 5, JSON bodies at most 32 KiB (enough for a 2000-character question in any escaped encoding), upload requests at most the file ceiling plus a 16 KiB multipart allowance. Total request bytes are enforced at the ASGI receive boundary, so a missing or misleading `Content-Length` cannot bypass them. Over-limit uploads answer 413 (size, pages, chunks) or 409 (paper count, corpus capacity) before embeddings or storage. Only one upload is admitted at a time, and the admission is taken before any body byte is received, so a second simultaneous upload answers 429 with `Retry-After` without being read. Every attempted real-model call is reserved in the ledger before the provider is contacted, using an explicit model-supported token bound (the exact tiktoken count plus framing and the output cap for OpenAI models; UTF-8 bytes for Ollama), and stays counted if it fails or times out; abstentions consume nothing; an exhausted allowance answers 429 with no provider call. An existing empty ledger file is refused rather than reinitialized. These ceilings bound usage; they are not a verified dollar cap. The demo must run as one worker on one instance.
+Fixed request bounds: questions up to 2000 characters, `top_k` at most 5, JSON bodies at most 32 KiB (enough for a 2000-character question in any escaped encoding), upload requests at most the file ceiling plus a 16 KiB multipart allowance. Total request bytes are enforced at the ASGI receive boundary, so a missing or misleading `Content-Length` cannot bypass them. Over-limit uploads answer 413 (size, pages, chunks) or 409 (paper count, corpus capacity) before embeddings or storage. Only one upload is admitted at a time, and the admission is taken before any body byte is received, so a second simultaneous upload answers 429 with `Retry-After` without being read. Every attempted real-model call is reserved in the ledger before the provider is contacted, using an explicit model-supported token bound (the exact tiktoken count plus framing and the output cap for OpenAI models), and stays counted if it fails or times out; abstentions consume nothing; an exhausted allowance answers 429 with no provider call. Ollama is an unsupported protected configuration: it fails closed as `token_bound_unavailable` because the server-side Modelfile `TEMPLATE`/`SYSTEM` adds input this client cannot bound. An existing empty ledger file is refused rather than reinitialized. These ceilings bound usage; they are not a verified dollar cap. The demo must run as one worker on one instance.
 
 Run it locally in demo mode:
 
@@ -212,6 +212,8 @@ ollama pull llama3
 export LLM_PROVIDER=ollama
 export LLM_MODEL=llama3
 ```
+
+Under the Stage 2c protections this configuration fails closed (`/ready` reports `init_error: token_bound_unavailable` and no model is invoked): Ollama applies the model's Modelfile `TEMPLATE`/`SYSTEM` outside the supplied prompt, so the input cannot be bounded from this client until a model/template-specific bound is implemented.
 
 ### Demo Mode (No API Key)
 ```bash

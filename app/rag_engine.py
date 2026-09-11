@@ -6,8 +6,10 @@ Handles PDF extraction, chunking, embedding, vector storage, and LLM query.
 
 Supports:
 - OpenAI (GPT-4o-mini, GPT-4o) via API key
-- Ollama (llama3, mistral) for local/free inference
 - Demo mode (no API key needed) for testing
+- Ollama: configurable, but the protected demo fails closed
+  (token_bound_unavailable) because the server-side Modelfile TEMPLATE/SYSTEM
+  cannot be bounded from this client; see app/tokens.py
 
 Bounds (Stage 2c): page, chunk, paper and corpus ceilings are checked before
 embeddings or storage; every real-model call is reserved in a persistent
@@ -234,9 +236,11 @@ class RAGEngine:
     def _init_llm(self):
         """Construct a bounded client; this does not verify remote credentials/connectivity.
 
-        Every supported provider receives an explicit timeout and output cap and
-        performs no automatic retries. A provider that cannot accept these bounds
-        fails construction and is reported as model_initialization_failed.
+        Every provider receives an explicit timeout and output cap and performs
+        no automatic retries. A provider that cannot accept these bounds fails
+        construction and is reported as model_initialization_failed. The Ollama
+        branch is reached only once a model/template-specific token bound
+        exists; today token_bound_for() fails closed before this point.
         """
         timeout = settings.LLM_TIMEOUT_SECONDS
         max_output_tokens = settings.LLM_MAX_OUTPUT_TOKENS
