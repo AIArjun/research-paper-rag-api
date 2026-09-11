@@ -48,7 +48,18 @@ Disk persistence is separate work: the paper registry and pending recovery metad
 
 ## Evidence status
 
-The local demo/fake-backend suite passes 100 tests at implementation time. The real Docker build and memory checks must complete in the associated pull request before this milestone is recorded as verified. Refer to its CI artifact for actual numbers and failures; do not infer a hosting recommendation from the configured memory limits alone.
+Measured 11 September 2026 at code commit `1512585932ee952428eeb629286a16e01aa448c5`. Both the demo CI and real-profile CI passed. The real dependency image ran 100 tests successfully (one existing AnyIO warning).
+
+| Configuration | Result | Time to local readiness | Workload evidence |
+|---|---|---|---|
+| 512 MiB / 0.1 CPU, no swap | Failed: OOM kill / exit 137 during first upload | 130.00 s | Startup reached ready, but no upload completed. Last observed pre-upload cgroup peak was 457.32 MiB; final peak after the kill was unavailable. |
+| 2 GiB / 1 CPU, no swap | Passed | 11.47 s | Both papers: 97 + 171 chunks; duplicate/list checks; real empty-filter retrieval, no model invocation; no OOM. |
+
+For the passing case, cgroup idle usage was 452.41 MiB and observed peak was 919.63 MiB. App-process RSS was 573.55 MiB at idle; high-water RSS reached 1,130.31 MiB. These metrics have different accounting and must not be treated as interchangeable. Container image size was 2,052,790,318 bytes (about 1.91 GiB).
+
+The 512 MiB failure establishes that this tested workload does not fit that limit. The 2 GiB result supports using a 2 GB hosting class for the protected demonstration; it does not establish capacity for concurrent clients or larger corpora. Do not spend on a 512 MB paid plan to address this observed memory failure.
+
+Permanent raw evidence: [stage2b-1512585.json](evidence/stage2b-1512585.json). [Real-profile CI](https://github.com/AIArjun/research-paper-rag-api/actions/runs/34576253008) includes build, test and container logs; [demo CI](https://github.com/AIArjun/research-paper-rag-api/actions/runs/34576252970) passed separately. Both refer to the same measured code commit. Subsequent documentation commits do not imply a new measurement.
 
 ## Primary references
 
