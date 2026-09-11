@@ -11,9 +11,10 @@ from fastapi.testclient import TestClient
 from app.main import app, rag
 from app.rag_engine import RAGEngine
 from app.config import Settings
+from tests.conftest import AUTH_HEADERS
 
 
-client = TestClient(app)
+client = TestClient(app, headers=AUTH_HEADERS)
 
 
 # ─── Helper ───
@@ -205,5 +206,5 @@ class TestSettings:
         assert s.LLM_PROVIDER == "demo"
         assert s.CHUNK_SIZE == 500
         assert s.CHUNK_OVERLAP == 100
-        assert s.MAX_FILE_SIZE_MB == 20
+        assert s.MAX_FILE_SIZE_MB == 10
         assert s.PORT == 8001

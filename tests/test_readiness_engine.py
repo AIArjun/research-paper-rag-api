@@ -55,16 +55,39 @@ def fake_modules(monkeypatch):
     modules["langchain_chroma"].Chroma = FakeStore
     modules["langchain_ollama"].OllamaLLM = FakeModel
     modules["langchain_openai"].ChatOpenAI = FakeModel
+
+    # A deterministic tokenizer: one token per character; "unmapped-model" is unknown.
+    class FakeEncoding:
+        name = "fake_base"
+
+        def encode(self, text, disallowed_special=()):
+            return [1] * len(text)
+
+    def encoding_for_model(model):
+        if model == "unmapped-model":
+            raise KeyError(model)
+        return FakeEncoding()
+
+    tiktoken = ModuleType("tiktoken")
+    tiktoken.encoding_for_model = encoding_for_model
+    monkeypatch.setitem(sys.modules, "tiktoken", tiktoken)
+    modules["tiktoken"] = tiktoken
     return modules
 
 
 @pytest.fixture
-def real_configuration(monkeypatch):
+def real_configuration(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "LLM_PROVIDER", "openai")
     monkeypatch.setattr(settings, "LLM_MODEL", "fake-test-model")
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "not-a-real-key")
     monkeypatch.setattr(settings, "CHUNK_SIZE", 500)
     monkeypatch.setattr(settings, "CHUNK_OVERLAP", 100)
+    # Real generation is disabled until accounting is explicit; tests use a temporary ledger.
+    monkeypatch.setattr(settings, "MODEL_CALL_LEDGER_PATH", str(tmp_path / "ledger.sqlite3"))
+    monkeypatch.setattr(settings, "MAX_MODEL_CALLS_PER_DAY", 10)
+    monkeypatch.setattr(settings, "MAX_MODEL_CALLS_TOTAL", 10)
+    monkeypatch.setattr(settings, "MAX_MODEL_TOKENS_PER_DAY", 100000)
+    monkeypatch.setattr(settings, "MAX_MODEL_TOKENS_TOTAL", 100000)
 
 
 @pytest.mark.parametrize(
@@ -163,18 +186,17 @@ def test_partial_initialization_is_reset_and_errors_are_categorical(
     assert error.value.category == category
 
 
-@pytest.mark.parametrize("provider", ["openai", "ollama"])
 def test_client_construction_reports_local_readiness_not_remote_verification(
-    monkeypatch, real_configuration, fake_modules, provider
+    monkeypatch, real_configuration, fake_modules
 ):
-    monkeypatch.setattr(settings, "LLM_PROVIDER", provider)
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "openai")
     engine = RAGEngine()
     state = engine.get_readiness()
     assert state == {
-        "configured_provider": provider,
+        "configured_provider": "openai",
         "configured_model": "fake-test-model",
         "effective_retrieval": "chroma",
-        "effective_generation": provider,
+        "effective_generation": "openai",
         "ready": True,
         "init_error": None,
         "pending_cleanup_ids": [],
@@ -182,8 +204,27 @@ def test_client_construction_reports_local_readiness_not_remote_verification(
     }
     assert engine._llm.calls == 0
     assert engine._embeddings.configuration["encode_kwargs"] == {"batch_size": 32}
-    if provider == "ollama":
-        assert engine._llm.configuration["validate_model_on_init"] is False
+
+
+def test_ollama_is_an_unsupported_protected_configuration_that_fails_closed(
+    monkeypatch, real_configuration, fake_modules
+):
+    """Ollama's server-side Modelfile TEMPLATE/SYSTEM cannot be bounded from the client."""
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "ollama")
+    monkeypatch.setattr(fake_modules["langchain_huggingface"], "HuggingFaceEmbeddings",
+                        lambda **_: pytest.fail("No backend is loaded without a token bound"))
+    monkeypatch.setattr(fake_modules["langchain_ollama"], "OllamaLLM",
+                        lambda **_: pytest.fail("No Ollama client is constructed without a token bound"))
+    engine = RAGEngine()
+    state = engine.get_readiness()
+    assert state["configured_provider"] == "ollama"
+    assert state["init_error"] == "token_bound_unavailable"
+    assert state["ready"] is False
+    assert state["effective_retrieval"] == "unavailable" and state["effective_generation"] == "unavailable"
+    assert engine._llm is None and engine._ledger is None and engine._token_bound is None
+    with pytest.raises(BackendUnavailableError) as error:
+        engine.query("A question")
+    assert error.value.category == "token_bound_unavailable"
 
 
 def test_readiness_is_cheap_and_does_not_probe_or_bool_test_backends(

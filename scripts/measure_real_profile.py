@@ -3,6 +3,11 @@
 The runtime container has no external network. A placeholder key only constructs
 the provider client; queries use a nonexistent paper filter and must abstain.
 Fixture hashes come from the reviewed 2026-09-10 public-paper manifest.
+
+Stage 2c: the container runs the protected API. A fixed fake access token and a
+one-call budget with a throwaway ledger are passed as environment variables so
+the measurement exercises authentication, limits and accounting. The token below
+is a test fixture, not a credential, and no model call is ever attempted.
 """
 
 import argparse
@@ -16,6 +21,15 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+
+MEASUREMENT_TOKEN = "measurement-only-fake-access-token-0123456789abcdef"
+MEASUREMENT_ENVIRONMENT = (
+    "DEMO_ACCESS_TOKEN=" + MEASUREMENT_TOKEN,
+    "ALLOWED_ORIGINS=",
+    "MODEL_CALL_LEDGER_PATH=/tmp/rag-measurement-ledger.sqlite3",
+    "MAX_MODEL_CALLS_PER_DAY=1", "MAX_MODEL_CALLS_TOTAL=1",
+    "MAX_MODEL_TOKENS_PER_DAY=2000", "MAX_MODEL_TOKENS_TOTAL=2000",
+)
 
 FIXTURES = (
     {
@@ -54,8 +68,12 @@ print(json.dumps(result))
 HTTP_HELPER = r'''
 import json, os, sys, urllib.error, urllib.request, uuid
 from pathlib import Path
-method, path, timeout, payload = sys.argv[1:]
+method, path, timeout, payload, credential = sys.argv[1:]
 headers = {}
+if credential == "configured":
+    headers["Authorization"] = "Bearer " + os.environ["DEMO_ACCESS_TOKEN"]
+elif credential == "wrong":
+    headers["Authorization"] = "Bearer wrong-measurement-token-0123456789abcdef0123"
 data = None
 if method == "UPLOAD":
     boundary = "rag-fixture-" + uuid.uuid4().hex
@@ -120,9 +138,9 @@ def metrics(name, timeout=20):
     return {"captured_at": utc_now(), **json.loads(output)}
 
 
-def request(name, method, path, payload="", timeout=180, execution_timeout=None):
+def request(name, method, path, payload="", timeout=180, execution_timeout=None, credential="configured"):
     _, output = command(
-        ["docker", "exec", name, "python", "-c", HTTP_HELPER, method, path, str(timeout), payload],
+        ["docker", "exec", name, "python", "-c", HTTP_HELPER, method, path, str(timeout), payload, credential],
         timeout=execution_timeout if execution_timeout is not None else timeout + 20,
     )
     return json.loads(output)
@@ -157,7 +175,9 @@ def measure_case(image, memory, cpus, directory, fixture_dir, ready_timeout):
         "limits": {"memory": memory, "memory_swap_total": memory, "cpus": cpus, "network": "none"},
         "startup_contract": {"PORT": 8765, "WEB_CONCURRENCY": 4, "expected_workers": 1},
         "status": "failed", "snapshots": {}, "requests": {},
-        "scope": "Local embeddings and Chroma; provider client construction only; no generation or relevance evaluation.",
+        "scope": "Local embeddings and Chroma behind the protected API; provider client construction only; "
+                 "no generation, accounting consumption or relevance evaluation.",
+        "protection": {"access_token": "fixed fake measurement token", "model_call_allowance": 1, "ledger": "throwaway /tmp file"},
         "measurement_note": "cgroup totals include temporary docker-exec HTTP/observer processes; PID 1 RSS is app-process memory.",
     }
     path = directory / (memory + ".json")
@@ -170,6 +190,7 @@ def measure_case(image, memory, cpus, directory, fixture_dir, ready_timeout):
             "--env", "LLM_MODEL=gpt-4o-mini", "--env", "PORT=8765", "--env", "WEB_CONCURRENCY=4",
             "--env", "HF_HUB_OFFLINE=1", "--env", "TRANSFORMERS_OFFLINE=1",
             "--env", "HF_HUB_DISABLE_TELEMETRY=1", "--env", "ANONYMIZED_TELEMETRY=FALSE",
+            *[flag for variable in MEASUREMENT_ENVIRONMENT for flag in ("--env", variable)],
             image,
         ])
         deadline = started + ready_timeout
@@ -204,6 +225,13 @@ def measure_case(image, memory, cpus, directory, fixture_dir, ready_timeout):
         require(ready.get("effective_retrieval") == "chroma", "Real retrieval did not initialize")
         require(ready.get("effective_generation") == "openai", "Real provider client did not initialize")
         require(ready.get("provider_connection_verified") is False, "Unexpected remote verification claim")
+        require(ready.get("access_configured") is True, "Access token was not reported as configured")
+        budget = ready.get("model_budget") or {}
+        require(budget.get("state") == "ok" and budget.get("configured") is True, "Model-call accounting is not ready")
+        require((budget.get("usage") or {}).get("calls_total") == 0, "Ledger already holds calls before any query")
+        require(budget.get("token_bound") == "tiktoken/o200k_base",
+                "The offline tiktoken bound for gpt-4o-mini did not resolve from the build-time cache")
+        require(MEASUREMENT_TOKEN not in json.dumps(ready), "Readiness must not expose the access token")
         report["snapshots"]["idle"] = metrics(name)
         require(all(report["snapshots"]["idle"].get(field) is not None
                     for field in ("memory.current", "memory.peak", "memory.events", "pid1_memory_kib")),
@@ -213,6 +241,11 @@ def measure_case(image, memory, cpus, directory, fixture_dir, ready_timeout):
                 "PID 1 did not honor the nondefault PORT=8765")
         require("--workers" in argv and argv[argv.index("--workers") + 1] == "1",
                 "PID 1 must explicitly keep one worker despite WEB_CONCURRENCY=4")
+        for label, credential in (("unauthenticated_papers", "none"), ("wrong_token_papers", "wrong")):
+            denied = request(name, "GET", "/papers", credential=credential)
+            report["requests"][label] = denied
+            require(denied["status"] == 401, "Protected route answered without a valid token: " + label)
+            require(MEASUREMENT_TOKEN not in json.dumps(denied), "A rejection must not expose the access token")
         command(["docker", "exec", name, "mkdir", "-p", "/tmp/rag-fixtures"])
         uploads = []
         for fixture in FIXTURES:
@@ -244,6 +277,12 @@ def measure_case(image, memory, cpus, directory, fixture_dir, ready_timeout):
         require(empty_query["status"] == 200, "Offline real retrieval failed")
         require(empty_query["body"]["citations"] == [], "Nonexistent filter returned citations")
         require(empty_query["body"]["model_used"] == "not-invoked", "Query attempted generation instead of abstaining")
+        require(empty_query["body"].get("model_usage") is None, "Abstention must not report model usage")
+        final_ready = request(name, "GET", "/ready")
+        report["requests"]["ready_after_query"] = final_ready
+        require(final_ready["status"] == 200, "Readiness degraded after the offline query")
+        require(final_ready["body"]["model_budget"]["usage"]["calls_total"] == 0,
+                "The abstaining query must not consume the model-call allowance")
         report["snapshots"]["after_query"] = metrics(name)
         require(report["snapshots"]["after_query"].get("memory.peak") is not None,
                 "Post-ingestion peak memory evidence is unavailable")

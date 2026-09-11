@@ -9,6 +9,7 @@ Stage 2b builds the actual local embedding and Chroma stack. A successful measur
 - `requirements-real-test.in` and its lock add test tools while constraining the runtime package versions. `requirements.txt` is a compatibility entry point to the real lock; it is not portable to other Python/OS/CPU combinations. `requirements-deploy.txt` and the existing `Dockerfile` remain the demo profile.
 - Embeddings: `sentence-transformers/all-MiniLM-L6-v2` revision `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`. The build fetches tokenizer/config files and `model.safetensors` into `/opt/models/all-MiniLM-L6-v2`. Runtime uses this local path with offline flags. The embedding batch size is 32.
 - Modular integrations: `langchain-huggingface`, `langchain-chroma`, `langchain-openai` and `langchain-ollama`. Explicit demo mode does not load these heavy backends.
+- Token reservations (Stage 2c): the build caches the tiktoken `o200k_base` and `cl100k_base` encoding tables under `/opt/tiktoken` (`TIKTOKEN_CACHE_DIR`), so the network-isolated runtime resolves the exact bound for OpenAI models without a download. A model whose encoding is not cached fails closed as `token_bound_unavailable`; readiness reports the bound in use (`model_budget.token_bound`) and the measurement asserts `tiktoken/o200k_base` for `gpt-4o-mini`.
 
 Regenerate the Linux locks with uv 0.12.13 (from the repository root):
 
@@ -30,7 +31,7 @@ docker run --rm --network none --memory 2g --memory-swap 2g --cpus 1 -e LLM_PROV
 python scripts/measure_real_profile.py --skip-build --image rag-real-profile:measurement --output measurement-artifacts
 ```
 
-The runtime container is network-isolated. No host port is exposed; checks run through localhost inside the container. A placeholder API key constructs a client but cannot authorize a paid call. The non-existent paper filter must retrieve nothing and return `model_used=not-invoked`. Both PDFs must ingest with expected identities/counts, and re-upload must preserve canonical metadata.
+The runtime container is network-isolated. No host port is exposed; checks run through localhost inside the container. A placeholder API key constructs a client but cannot authorize a paid call. Since Stage 2c the container also receives a fixed fake `DEMO_ACCESS_TOKEN`, an empty `ALLOWED_ORIGINS`, a throwaway ledger path under `/tmp` and a one-call allowance, so the measurement runs through the protected API: unauthenticated and wrong-token requests must answer 401, readiness must report the access token and accounting as configured without exposing the token, the non-existent paper filter must retrieve nothing and return `model_used=not-invoked`, and the ledger must still show zero calls afterwards. Both PDFs must ingest with expected identities/counts within the default limits (10 MiB, 60 pages, 600 chunks per paper), and re-upload must preserve canonical metadata.
 
 Profiles: 512 MiB / 0.1 CPU and 2 GiB / 1 CPU, with swap disabled. Both are measured and failures retained. This changes CPU as well as memory; results are an isolated CI experiment, not a controlled CPU comparison or a measurement on Render. The readiness deadline is at most 300 seconds per case. The 2 GiB case must pass for overall success.
 
@@ -40,7 +41,7 @@ Artifacts record the exact Git commit, image identity/size, time to ready, app-p
 
 The real image starts one Uvicorn worker and honors `PORT`. Its default build target runs the API; `--target test` runs tests. The measurement overrides the port and tests that one worker is still selected when `WEB_CONCURRENCY` suggests more. The image runs as a non-root user (UID 10001).
 
-Initialization/generation logs now include allowlisted exception type, module, missing dependency and HTTP status where available. They do not stringify exception bodies, keys, URLs or tracebacks. HTTP responses remain categorical. Existing question-prefix logging and generic HTTP error sanitization remain Stage 2c work; this is not a whole-application logging/privacy review.
+Initialization/generation logs now include allowlisted exception type, module, missing dependency and HTTP status where available. They do not stringify exception bodies, keys, URLs or tracebacks. HTTP responses remain categorical. Stage 2c replaced question-prefix logging and raw exception responses with categorical errors and request correlation (see [STAGE2C.md](STAGE2C.md)); this is still not a whole-application logging/privacy review.
 
 Current Render settings still build `./Dockerfile`, not this real profile. Its dashboard start-command override wins over a Dockerfile CMD. A later deliberate deployment must select `./Dockerfile.real` and clear the override or explicitly align `PORT` and `--workers 1`, set the appropriate readiness path, and configure protection/secrets directly in Render. Do not change the existing public service merely to run these resource tests.
 

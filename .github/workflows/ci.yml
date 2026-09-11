@@ -13,6 +13,8 @@ jobs:
     env:
       LLM_PROVIDER: demo
       OPENAI_API_KEY: ""
+      # Test fixture only; tests/conftest.py sets the same fake token for the suite.
+      CI_FAKE_DEMO_TOKEN: ci-only-fake-demo-access-token-0123456789abcdef
 
     steps:
       - name: Checkout code
@@ -27,7 +29,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-deploy.txt
-          pip install pytest httpx reportlab
+          pip install pytest httpx reportlab "tiktoken==0.14.0"
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
@@ -35,11 +37,16 @@ jobs:
       - name: Build the deployed Docker profile
         run: docker build -t rag-foundation-ci .
 
-      - name: Smoke-test Docker demo startup
+      - name: Smoke-test the protected Docker demo
         run: |
-          docker run -d --name rag-foundation-ci -p 18001:8001 -e LLM_PROVIDER=demo rag-foundation-ci
+          docker run -d --name rag-foundation-ci -p 18001:8001 -e LLM_PROVIDER=demo -e DEMO_ACCESS_TOKEN="$CI_FAKE_DEMO_TOKEN" rag-foundation-ci
           curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-connrefused --retry-delay 1 --max-time 5 --retry-max-time 60 http://localhost:18001/health --output /tmp/rag-health.json
-          python -c 'import json; data = json.load(open("/tmp/rag-health.json")); assert data["status"] == "healthy" and data["llm_provider"] == "demo" and data["papers_loaded"] == 0; print(data)'
+          python -c 'import json, os; data = json.load(open("/tmp/rag-health.json")); assert data["status"] == "healthy" and data["llm_provider"] == "demo" and data["papers_loaded"] == 0 and data["access_configured"] is True; assert os.environ["CI_FAKE_DEMO_TOKEN"] not in json.dumps(data); print(data)'
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://localhost:18001/papers)" = "401"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' -H 'Authorization: Bearer wrong-token-0123456789abcdef0123456789' http://localhost:18001/papers)" = "401"
+          curl --fail --silent --show-error -H "Authorization: Bearer $CI_FAKE_DEMO_TOKEN" http://localhost:18001/papers --output /tmp/rag-papers.json
+          python -c 'import json; assert json.load(open("/tmp/rag-papers.json")) == []; print("protected list ok")'
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $CI_FAKE_DEMO_TOKEN" -H 'Content-Type: application/json' --data '{"question": "What is attention?", "top_k": 9}' http://localhost:18001/query)" = "422"
 
       - name: Container logs
         if: failure()
