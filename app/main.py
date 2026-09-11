@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from app.rag_engine import RAGEngine
+from app.rag_engine import RAGEngine, StorageMutationError
 from app.config import settings
 
 # ─── Logging ───
@@ -113,6 +113,8 @@ class Citation(BaseModel):
     page: Optional[int] = None
     paper: str
     relevance_score: float
+    paper_id: Optional[str] = None
+    chunk_id: Optional[str] = None
 
 
 class QueryResponse(BaseModel):
@@ -236,6 +238,19 @@ async def upload_paper(
     try:
         result = rag.ingest_paper(contents, file.filename)
         elapsed = (time.time() - start) * 1000
+    except StorageMutationError as error:
+        logger.error("Paper ingestion requires storage recovery")
+        raise HTTPException(status_code=503, detail={
+            "message": (
+                "Paper storage failed. Retry deletion of this ID to confirm cleanup before retrying the upload."
+                if error.cleanup_required else
+                "Paper indexing failed and partial data was removed. Retry the upload when storage is available."
+            ),
+            "paper_id": error.paper_id,
+            "cleanup_required": error.cleanup_required,
+        })
+    except ValueError:
+        raise HTTPException(status_code=400, detail="PDF text or chunk configuration is invalid.")
     except Exception as e:
         logger.error(f"Paper ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
@@ -247,11 +262,11 @@ async def upload_paper(
 
     return UploadResponse(
         paper_id=result["paper_id"],
-        filename=file.filename,
+        filename=result["filename"],
         pages=result["pages"],
         chunks=result["chunks"],
         processing_time_ms=round(elapsed, 2),
-        message=f"Paper '{file.filename}' processed successfully. {result['chunks']} chunks indexed.",
+        message=f"Paper '{result['filename']}' is indexed. {result['chunks']} chunks available.",
     )
 
 
@@ -266,18 +281,26 @@ async def query_papers(request: QueryRequest):
     request_id = str(uuid.uuid4())[:8]
     logger.info(f"[{request_id}] Query: {request.question[:80]}...")
 
-    if rag.get_stats()["total_chunks"] == 0:
-        raise HTTPException(
-            status_code=400,
-            detail="No papers uploaded yet. Upload a paper first via POST /papers/upload.",
-        )
-
     try:
+        rag.assert_storage_ready()
+        if rag.get_stats()["total_chunks"] == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No papers uploaded yet. Upload a paper first via POST /papers/upload.",
+            )
         result = rag.query(
             question=request.question,
             paper_id=request.paper_id,
             top_k=request.top_k,
         )
+    except HTTPException:
+        raise
+    except StorageMutationError as error:
+        logger.error(f"[{request_id}] Query blocked pending storage cleanup")
+        raise HTTPException(status_code=503, detail={
+            "message": "Paper storage requires cleanup before querying. Retry deletion of this ID.",
+            "paper_id": error.paper_id,
+        })
     except Exception as e:
         logger.error(f"[{request_id}] Query failed: {e}")
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
@@ -288,6 +311,8 @@ async def query_papers(request: QueryRequest):
             page=c.get("page"),
             paper=c["paper"],
             relevance_score=round(c["score"], 4),
+            paper_id=c.get("paper_id"),
+            chunk_id=c.get("chunk_id"),
         )
         for c in result["citations"]
     ]
@@ -320,7 +345,14 @@ async def list_papers():
 @app.delete("/papers/{paper_id}", tags=["Papers"])
 async def delete_paper(paper_id: str):
     """Remove a paper from the knowledge base."""
-    success = rag.delete_paper(paper_id)
+    try:
+        success = rag.delete_paper(paper_id)
+    except StorageMutationError as error:
+        logger.error("Paper deletion requires storage recovery")
+        raise HTTPException(status_code=503, detail={
+            "message": "Paper deletion did not complete. Retry deletion; the paper is not confirmed removed.",
+            "paper_id": error.paper_id,
+        })
     if not success:
         raise HTTPException(status_code=404, detail=f"Paper '{paper_id}' not found.")
     return {"message": f"Paper '{paper_id}' deleted successfully."}

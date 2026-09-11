@@ -1,4 +1,4 @@
-name: CI - Tests
+name: CI - Demo foundation tests
 
 on:
   push:
@@ -9,21 +9,38 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LLM_PROVIDER: demo
+      OPENAI_API_KEY: ""
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.11 (Docker runtime)
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-deploy.txt
           pip install pytest httpx reportlab
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
+
+      - name: Build the deployed Docker profile
+        run: docker build -t rag-foundation-ci .
+
+      - name: Smoke-test Docker demo startup
+        run: |
+          docker run -d --name rag-foundation-ci -p 18001:8001 -e LLM_PROVIDER=demo rag-foundation-ci
+          curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-connrefused --retry-delay 1 --max-time 5 --retry-max-time 60 http://localhost:18001/health --output /tmp/rag-health.json
+          python -c 'import json; data = json.load(open("/tmp/rag-health.json")); assert data["status"] == "healthy" and data["llm_provider"] == "demo" and data["papers_loaded"] == 0; print(data)'
+
+      - name: Container logs
+        if: failure()
+        run: docker logs rag-foundation-ci || true

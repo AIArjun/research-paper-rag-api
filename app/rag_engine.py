@@ -16,13 +16,22 @@ import hashlib
 import io
 import logging
 import time
-import uuid
 from datetime import datetime, timezone
+from threading import RLock
 from typing import Optional
 
 from app.config import settings
 
 logger = logging.getLogger("rag-api.engine")
+
+
+class StorageMutationError(RuntimeError):
+    """Storage work failed or needs cleanup before the corpus is usable."""
+
+    def __init__(self, message: str, paper_id: Optional[str] = None, cleanup_required: bool = True):
+        super().__init__(message)
+        self.paper_id = paper_id
+        self.cleanup_required = cleanup_required
 
 
 class RAGEngine:
@@ -40,6 +49,10 @@ class RAGEngine:
     def __init__(self):
         self.papers: dict[str, dict] = {}
         self.chunks_store: list[dict] = []
+        # Failed storage mutations remain recoverable by retrying deletion.
+        # This guard is process-local; durable recovery is a separate milestone.
+        self._pending_cleanup: dict[str, list[str]] = {}
+        self._mutation_lock = RLock()
         self._vectorstore = None
         self._embeddings = None
         self._llm = None
@@ -132,7 +145,17 @@ class RAGEngine:
         chunk_size: int = 500,
         chunk_overlap: int = 100,
     ) -> list[dict]:
-        """Split page texts into overlapping chunks."""
+        """Split page texts into overlapping chunks with strictly advancing offsets."""
+        if (
+            not isinstance(chunk_size, int)
+            or isinstance(chunk_size, bool)
+            or not isinstance(chunk_overlap, int)
+            or isinstance(chunk_overlap, bool)
+            or chunk_size <= 0
+            or not 0 <= chunk_overlap < chunk_size
+        ):
+            raise ValueError("Chunk settings require integer size > 0 and 0 <= overlap < size.")
+
         chunks = []
         for page_data in pages:
             text = page_data["text"]
@@ -148,7 +171,9 @@ class RAGEngine:
                     last_period = text.rfind(".", start, end)
                     last_newline = text.rfind("\n", start, end)
                     break_at = max(last_period, last_newline)
-                    if break_at > start:
+                    # A short sentence boundary must not send the next offset
+                    # backward, or leave it unchanged after applying overlap.
+                    if break_at + 1 > start + chunk_overlap:
                         end = break_at + 1
 
                 chunk_text = text[start:end].strip()
@@ -167,10 +192,30 @@ class RAGEngine:
         """
         Process and index a research paper.
 
+        Identical bytes are idempotent within the loaded registry: retain the
+        original filename, upload time and chunks without indexing again.
+
         Returns:
-            dict with paper_id, pages count, chunks count
+            dict with paper_id, canonical filename, pages count, chunks count
         """
-        paper_id = hashlib.md5(pdf_bytes[:1024]).hexdigest()[:12]
+        with self._mutation_lock:
+            return self._ingest_paper(pdf_bytes, filename)
+
+    def _ingest_paper(self, pdf_bytes: bytes, filename: str) -> dict:
+        paper_id = hashlib.sha256(pdf_bytes).hexdigest()
+        if paper_id in self._pending_cleanup:
+            raise StorageMutationError(
+                f"Paper '{paper_id}' needs storage cleanup; retry deletion before uploading.",
+                paper_id=paper_id,
+            )
+        if paper_id in self.papers:
+            paper = self.papers[paper_id]
+            return {
+                "paper_id": paper_id,
+                "filename": paper["filename"],
+                "pages": paper["pages"],
+                "chunks": paper["chunks"],
+            }
 
         # Extract text
         pages = self._extract_pdf(pdf_bytes)
@@ -178,10 +223,16 @@ class RAGEngine:
             raise ValueError("Could not extract text from PDF. Is it scanned/image-based?")
 
         # Chunk
-        chunks = self._chunk_text(pages)
+        chunks = self._chunk_text(
+            pages,
+            chunk_size=settings.CHUNK_SIZE,
+            chunk_overlap=settings.CHUNK_OVERLAP,
+        )
+        if not chunks:
+            raise ValueError("Could not extract non-empty text chunks from PDF.")
 
-        # Store metadata
-        self.papers[paper_id] = {
+        # Publish this record only after the storage operation succeeds.
+        paper = {
             "paper_id": paper_id,
             "filename": filename,
             "pages": len(pages),
@@ -195,13 +246,31 @@ class RAGEngine:
             metadatas = [
                 {
                     "paper_id": paper_id,
+                    "chunk_id": f"{paper_id}-{index}",
                     "filename": filename,
                     "page": c["page"],
                 }
-                for c in chunks
+                for index, c in enumerate(chunks)
             ]
             ids = [f"{paper_id}-{i}" for i in range(len(chunks))]
-            self._vectorstore.add_texts(texts=texts, metadatas=metadatas, ids=ids)
+            try:
+                self._vectorstore.add_texts(texts=texts, metadatas=metadatas, ids=ids)
+            except Exception as error:
+                # A backend may have written part of a batch before raising.
+                try:
+                    self._vectorstore.delete(ids=ids)
+                except Exception:
+                    self._pending_cleanup[paper_id] = ids
+                    raise StorageMutationError(
+                        f"Indexing and rollback failed for paper '{paper_id}'. "
+                        "Corpus queries are blocked until deletion is retried successfully.",
+                        paper_id=paper_id,
+                    ) from error
+                raise StorageMutationError(
+                    f"Indexing failed for paper '{paper_id}'; partial vectors were removed.",
+                    paper_id=paper_id,
+                    cleanup_required=False,
+                ) from error
             logger.info(f"Added {len(chunks)} chunks to vector store for '{filename}'")
         else:
             # Demo mode: store chunks in memory
@@ -212,11 +281,23 @@ class RAGEngine:
             self.chunks_store.extend(chunks)
             logger.info(f"Demo mode: stored {len(chunks)} chunks in memory")
 
+        self.papers[paper_id] = paper
         return {
             "paper_id": paper_id,
+            "filename": paper["filename"],
             "pages": len(pages),
             "chunks": len(chunks),
         }
+
+    def assert_storage_ready(self) -> None:
+        """Reject access to a corpus whose last mutation needs explicit cleanup."""
+        with self._mutation_lock:
+            if self._pending_cleanup:
+                raise StorageMutationError(
+                    "Corpus queries are blocked by an incomplete storage mutation. "
+                    "Retry deletion of the affected paper before querying.",
+                    paper_id=next(iter(self._pending_cleanup)),
+                )
 
     def query(
         self,
@@ -233,26 +314,33 @@ class RAGEngine:
         # ─── Retrieval ───
         retrieval_start = time.time()
 
-        if self._vectorstore:
-            search_kwargs = {"k": top_k}
-            if paper_id:
-                search_kwargs["filter"] = {"paper_id": paper_id}
+        with self._mutation_lock:
+            self.assert_storage_ready()
+            if self._vectorstore:
+                search_kwargs = {"k": top_k}
+                if paper_id:
+                    search_kwargs["filter"] = {"paper_id": paper_id}
 
-            results = self._vectorstore.similarity_search_with_relevance_scores(
-                question, **search_kwargs
-            )
-            citations = [
-                {
-                    "text": doc.page_content[:300],
-                    "page": doc.metadata.get("page"),
-                    "paper": doc.metadata.get("filename", "unknown"),
-                    "score": score,
-                }
-                for doc, score in results
-            ]
-        else:
-            # Demo mode: simple keyword matching
-            citations = self._demo_retrieve(question, paper_id, top_k)
+                results = self._vectorstore.similarity_search_with_relevance_scores(
+                    question, **search_kwargs
+                )
+                passages = [
+                    {
+                        "text": doc.page_content,
+                        "page": doc.metadata.get("page"),
+                        "paper": doc.metadata.get("filename", "unknown"),
+                        "paper_id": doc.metadata.get("paper_id"),
+                        "chunk_id": doc.metadata.get("chunk_id"),
+                        "score": score,
+                    }
+                    for doc, score in results
+                ]
+            else:
+                # Demo mode: simple keyword matching
+                passages = self._demo_retrieve(question, paper_id, top_k)
+
+        # Citation previews are presentation data, not the generation context.
+        citations = [{**passage, "text": passage["text"][:300]} for passage in passages]
 
         retrieval_time = (time.time() - retrieval_start) * 1000
 
@@ -265,7 +353,7 @@ class RAGEngine:
         if self._llm and citations:
             context = "\n\n".join(
                 f"[Source: {c['paper']}, Page {c.get('page', '?')}]\n{c['text']}"
-                for c in citations
+                for c in passages
             )
             prompt = (
                 "You are a research assistant. Answer the question based ONLY on the "
@@ -316,9 +404,11 @@ class RAGEngine:
             if overlap > 0:
                 score = overlap / max(len(question_words), 1)
                 scored.append({
-                    "text": chunk["text"][:300],
+                    "text": chunk["text"],
                     "page": chunk.get("page"),
                     "paper": chunk.get("filename", "unknown"),
+                    "paper_id": chunk.get("paper_id"),
+                    "chunk_id": chunk.get("chunk_id"),
                     "score": min(score, 1.0),
                 })
 
@@ -352,36 +442,57 @@ class RAGEngine:
 
     def list_papers(self) -> list[dict]:
         """List all papers in the knowledge base."""
-        return list(self.papers.values())
+        with self._mutation_lock:
+            return [
+                paper.copy() for paper_id, paper in self.papers.items()
+                if paper_id not in self._pending_cleanup
+            ]
 
     def delete_paper(self, paper_id: str) -> bool:
         """Remove a paper and its chunks from the knowledge base."""
-        if paper_id not in self.papers:
+        with self._mutation_lock:
+            return self._delete_paper(paper_id)
+
+    def _delete_paper(self, paper_id: str) -> bool:
+        if paper_id not in self.papers and paper_id not in self._pending_cleanup:
             return False
 
         if self._vectorstore:
             # Delete from ChromaDB
-            try:
+            ids_to_delete = self._pending_cleanup.get(paper_id)
+            if ids_to_delete is None:
                 ids_to_delete = [
-                    f"{paper_id}-{i}"
-                    for i in range(self.papers[paper_id]["chunks"])
+                    f"{paper_id}-{i}" for i in range(self.papers[paper_id]["chunks"])
                 ]
+            try:
                 self._vectorstore.delete(ids=ids_to_delete)
             except Exception as e:
-                logger.warning(f"Error deleting from vector store: {e}")
+                self._pending_cleanup[paper_id] = ids_to_delete
+                raise StorageMutationError(
+                    f"Deletion failed for paper '{paper_id}'. "
+                    "Corpus queries are blocked until deletion is retried successfully.",
+                    paper_id=paper_id,
+                ) from e
+        elif paper_id in self._pending_cleanup:
+            raise StorageMutationError(
+                "The vector store is unavailable; storage cleanup cannot be confirmed.",
+                paper_id=paper_id,
+            )
 
         # Remove from memory
         self.chunks_store = [
             c for c in self.chunks_store if c.get("paper_id") != paper_id
         ]
-        del self.papers[paper_id]
+        self.papers.pop(paper_id, None)
+        self._pending_cleanup.pop(paper_id, None)
         logger.info(f"Deleted paper: {paper_id}")
         return True
 
     def get_stats(self) -> dict:
         """Get knowledge base statistics."""
-        total_chunks = sum(p["chunks"] for p in self.papers.values())
+        papers = self.list_papers()
+        total_chunks = sum(p["chunks"] for p in papers)
         return {
-            "papers_loaded": len(self.papers),
+            "papers_loaded": len(papers),
             "total_chunks": total_chunks,
         }
