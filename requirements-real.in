@@ -1,0 +1,14 @@
+# Linux x86_64 / Python 3.11 CPU profile. Compile to requirements-real.lock.txt.
+# CPU wheel source and SHA-256 are from the official PyTorch CPU index.
+fastapi==0.141.1
+uvicorn==0.52.4
+python-multipart==0.0.32
+pydantic==2.13.5
+pypdf==6.18.0
+pdfplumber==0.11.10
+langchain-huggingface==1.2.2
+langchain-chroma==1.1.0
+langchain-openai==1.6.2
+langchain-ollama==1.1.0
+sentence-transformers==6.0.1
+torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.14.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl#sha256=673dbf5c9bbadfffab7a386b6dd7a0c219f1408a328b7b4e86d0ae551cdafa42

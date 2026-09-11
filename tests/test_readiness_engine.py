@@ -21,10 +21,9 @@ from app.rag_engine import (
 def fake_modules(monkeypatch):
     modules = {}
     for name in (
-        "langchain_community",
-        "langchain_community.embeddings",
-        "langchain_community.vectorstores",
-        "langchain_community.llms",
+        "langchain_huggingface",
+        "langchain_chroma",
+        "langchain_ollama",
         "langchain_openai",
     ):
         module = ModuleType(name)
@@ -46,14 +45,15 @@ def fake_modules(monkeypatch):
     class FakeModel:
         def __init__(self, **kwargs):
             self.calls = 0
+            self.configuration = kwargs
 
         def invoke(self, prompt):
             self.calls += 1
             return SimpleNamespace(content="A fake test answer.")
 
-    modules["langchain_community.embeddings"].HuggingFaceEmbeddings = FakeEmbeddings
-    modules["langchain_community.vectorstores"].Chroma = FakeStore
-    modules["langchain_community.llms"].Ollama = FakeModel
+    modules["langchain_huggingface"].HuggingFaceEmbeddings = FakeEmbeddings
+    modules["langchain_chroma"].Chroma = FakeStore
+    modules["langchain_ollama"].OllamaLLM = FakeModel
     modules["langchain_openai"].ChatOpenAI = FakeModel
     return modules
 
@@ -119,7 +119,7 @@ def test_malformed_chunk_environment_reports_readiness_instead_of_import_failure
 
 def test_missing_key_fails_before_importing_real_dependencies(monkeypatch, real_configuration):
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "   ")
-    monkeypatch.setitem(sys.modules, "langchain_community.embeddings", None)
+    monkeypatch.setitem(sys.modules, "langchain_huggingface", None)
     engine = RAGEngine()
     assert engine.get_readiness()["init_error"] == "missing_api_key"
     assert engine._vectorstore is None and engine._llm is None
@@ -128,7 +128,7 @@ def test_missing_key_fails_before_importing_real_dependencies(monkeypatch, real_
 
 
 def test_missing_dependency_is_not_a_demo_fallback(monkeypatch, real_configuration, fake_modules):
-    monkeypatch.setitem(sys.modules, "langchain_community.embeddings", None)
+    monkeypatch.setitem(sys.modules, "langchain_huggingface", None)
     engine = RAGEngine()
     state = engine.get_readiness()
     assert state["configured_provider"] == "openai"
@@ -140,8 +140,8 @@ def test_missing_dependency_is_not_a_demo_fallback(monkeypatch, real_configurati
 @pytest.mark.parametrize(
     "module,class_name,category",
     [
-        ("langchain_community.embeddings", "HuggingFaceEmbeddings", "embedding_initialization_failed"),
-        ("langchain_community.vectorstores", "Chroma", "storage_initialization_failed"),
+        ("langchain_huggingface", "HuggingFaceEmbeddings", "embedding_initialization_failed"),
+        ("langchain_chroma", "Chroma", "storage_initialization_failed"),
         ("langchain_openai", "ChatOpenAI", "model_initialization_failed"),
     ],
 )
@@ -156,6 +156,8 @@ def test_partial_initialization_is_reset_and_errors_are_categorical(
     assert engine.get_readiness()["init_error"] == category
     assert engine._embeddings is None and engine._vectorstore is None and engine._llm is None
     assert "sensitive backend detail" not in caplog.text
+    assert f"category={category}" in caplog.text
+    assert "exception_type=OSError" in caplog.text
     with pytest.raises(BackendUnavailableError) as error:
         engine.assert_backend_ready()
     assert error.value.category == category
@@ -179,6 +181,9 @@ def test_client_construction_reports_local_readiness_not_remote_verification(
         "provider_connection_verified": False,
     }
     assert engine._llm.calls == 0
+    assert engine._embeddings.configuration["encode_kwargs"] == {"batch_size": 32}
+    if provider == "ollama":
+        assert engine._llm.configuration["validate_model_on_init"] is False
 
 
 def test_readiness_is_cheap_and_does_not_probe_or_bool_test_backends(
@@ -270,6 +275,8 @@ def test_generation_error_propagates_without_demo_answer(
         engine.query("A question")
     assert "sensitive provider detail" not in str(error.value)
     assert "sensitive provider detail" not in caplog.text
+    assert "category=generation_failed" in caplog.text
+    assert "exception_type=OSError" in caplog.text
 
 
 def test_real_empty_retrieval_abstains_without_claiming_model_use(real_configuration, fake_modules):
@@ -283,7 +290,7 @@ def test_real_empty_retrieval_abstains_without_claiming_model_use(real_configura
 
 def test_explicit_demo_remains_available_without_model_dependencies(monkeypatch):
     monkeypatch.setattr(settings, "LLM_PROVIDER", "demo")
-    monkeypatch.setitem(sys.modules, "langchain_community.embeddings", None)
+    monkeypatch.setitem(sys.modules, "langchain_huggingface", None)
     engine = RAGEngine()
     state = engine.get_readiness()
     assert state["ready"] is True and state["init_error"] is None

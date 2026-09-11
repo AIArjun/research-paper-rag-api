@@ -21,6 +21,7 @@ from threading import RLock
 from typing import Optional
 
 from app.config import settings
+from app.diagnostics import log_safe_error
 
 logger = logging.getLogger("rag-api.engine")
 
@@ -82,9 +83,9 @@ class RAGEngine:
         self._init_error = None
         try:
             settings.validate()
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as error:
             self._init_error = "invalid_configuration"
-            logger.error("RAG initialization failed: invalid_configuration")
+            log_safe_error(logger, self._init_error, error)
             return
 
         if self._configured_provider == "demo":
@@ -92,18 +93,20 @@ class RAGEngine:
             return
         if self._configured_provider == "openai" and not settings.OPENAI_API_KEY.strip():
             self._init_error = "missing_api_key"
-            logger.error("RAG initialization failed: missing_api_key")
+            log_safe_error(logger, self._init_error)
             return
 
         failure_category = "embedding_initialization_failed"
+        initialization_error = None
         try:
-            from langchain_community.embeddings import HuggingFaceEmbeddings
-            from langchain_community.vectorstores import Chroma
+            from langchain_huggingface import HuggingFaceEmbeddings
+            from langchain_chroma import Chroma
 
-            logger.info(f"Initializing embeddings: {settings.EMBEDDING_MODEL}")
+            logger.info("Initializing embedding backend")
             self._embeddings = HuggingFaceEmbeddings(
                 model_name=settings.EMBEDDING_MODEL,
                 model_kwargs={"device": "cpu"},
+                encode_kwargs={"batch_size": 32},
             )
             failure_category = "storage_initialization_failed"
             self._vectorstore = Chroma(
@@ -114,15 +117,17 @@ class RAGEngine:
             logger.info("Vector store initialized (ChromaDB).")
             failure_category = "model_initialization_failed"
             self._init_llm()
-        except ImportError:
+        except ImportError as error:
             self._init_error = "missing_dependency"
-        except Exception:
+            initialization_error = error
+        except Exception as error:
             self._init_error = failure_category
+            initialization_error = error
         if self._init_error is not None:
             self._embeddings = None
             self._vectorstore = None
             self._llm = None
-            logger.error("RAG initialization failed: %s", self._init_error)
+            log_safe_error(logger, self._init_error, initialization_error)
 
     def _init_llm(self):
         """Construct a client; this does not verify remote credentials/connectivity."""
@@ -135,11 +140,12 @@ class RAGEngine:
                 api_key=settings.OPENAI_API_KEY,
             )
         elif self._configured_provider == "ollama":
-            from langchain_community.llms import Ollama
+            from langchain_ollama import OllamaLLM
 
-            self._llm = Ollama(
+            self._llm = OllamaLLM(
                 model=self._configured_model,
                 base_url=settings.OLLAMA_URL,
+                validate_model_on_init=False,
             )
 
     def get_readiness(self) -> dict:
@@ -440,7 +446,7 @@ class RAGEngine:
                 answer = response.content if hasattr(response, "content") else str(response)
                 model_used = self._configured_model
             except Exception as e:
-                logger.error("LLM generation failed")
+                log_safe_error(logger, "generation_failed", e)
                 raise GenerationError("The configured model failed to generate an answer.") from e
         elif not citations:
             answer = "The retrieved sources contain insufficient evidence to answer this question."

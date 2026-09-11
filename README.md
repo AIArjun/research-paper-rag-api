@@ -6,7 +6,7 @@ A research **Retrieval-Augmented Generation (RAG)** API prototype. Upload resear
 
 Built with **LangChain + FastAPI + ChromaDB + OpenAI/Ollama + Docker**.
 
-**Deployment profile:** the Dockerfile installs the lightweight demo dependencies. Demo mode uses keyword retrieval and template answers; adding a provider key does not install the missing real-RAG libraries. Requested real mode reports unavailable when its dependencies or configuration are missing. Authentication, spending limits, compatible real dependencies and durable metadata are still required before exposing paid inference. The public deployment may lag this branch; verify its deployed commit before relying on new behavior.
+**Deployment profiles:** `Dockerfile` installs lightweight demo dependencies. Demo mode uses keyword retrieval and template answers. `Dockerfile.real` provides a separate pinned Linux/Python 3.11 CPU profile with local embeddings and Chroma; its build, tests and resource measurements are described in [the real-profile guide](docs/REAL-PROFILE.md). Adding a provider key to the demo image does not install real-RAG libraries. Authentication, spending limits and durable metadata are still unfinished. The public deployment may lag this branch; verify its deployed commit before relying on new behavior.
 
 ## Foundation behavior
 
@@ -91,22 +91,22 @@ cd research-paper-rag-api
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
 
-pip install -r requirements.txt
+pip install -r requirements-deploy.txt
 
 # Run in demo mode (no API key needed)
 uvicorn app.main:app --reload --port 8001
 
-# Or with OpenAI
-export OPENAI_API_KEY=sk-your-key
-export LLM_PROVIDER=openai
-uvicorn app.main:app --reload --port 8001
 ```
+
+On Windows, activate the virtual environment with `venv\Scripts\Activate.ps1`. This quick start runs the portable demo profile. For the Linux x86_64 real profile, use the separate container and measurement guide below; `requirements.txt` now points to the same hash-locked real dependencies.
 
 ### Option 2: Docker
 
 ```bash
 docker-compose up --build
 ```
+
+This uses the demo Dockerfile. To build and measure the real local embedding/retrieval pipeline without paid calls, follow [Stage 2b: real profile](docs/REAL-PROFILE.md). Its container runs without an external network during measurement and uses a placeholder key only to construct the client.
 
 ### Access
 
