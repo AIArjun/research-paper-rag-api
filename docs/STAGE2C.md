@@ -73,7 +73,7 @@ Docker is not available in the authoring environment, so the demo image smoke te
 1. Keep one Uvicorn worker and one instance. The admission slots, registry and ledger transactions assume a single process on one volume; `WEB_CONCURRENCY` must not raise the worker count (the real image pins `--workers 1`).
 2. Choose the compute class from the Stage 2b evidence: the measured workload does not fit 512 MiB; the 2 GiB / 1 CPU class passed two-paper ingestion. Upgrading the Render service is a separate, deliberate decision.
 3. Enter secrets directly in the Render dashboard, never in the repository: `DEMO_ACCESS_TOKEN` (generated, at least 32 characters) and the provider key. Rotate the token by replacing the variable and redeploying.
-4. Attach a persistent disk and point `MODEL_CALL_LEDGER_PATH` and `VECTORSTORE_PATH` at it; verify after a restart that `/ready` still reports the earlier `ledger_created_at` and counts.
+4. Attach a persistent disk and point `MODEL_CALL_LEDGER_PATH` at it; verify after a restart that `/ready` still reports the earlier `ledger_created_at` and counts. Superseded detail: do **not** point `VECTORSTORE_PATH` at the disk. The paper registry is process memory, so a persisted Chroma store would disagree with it after a restart; until durable paper metadata exists the corpus stays disposable and only the ledger persists (see [STAGE3.md](STAGE3.md)).
 5. Set all four allowances to the agreed small verification budget; leave them at zero (generation disabled) until that budget exists.
 6. Align the service with the real profile: `./Dockerfile.real`, clear or match the start-command override (`--workers 1`, `PORT`), readiness path `/ready`.
 7. Set `ALLOWED_ORIGINS` only when a browser client exists; leave it empty otherwise.
