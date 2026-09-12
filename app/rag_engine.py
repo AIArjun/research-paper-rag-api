@@ -632,7 +632,9 @@ class RAGEngine:
                 if paper_id:
                     search_kwargs["filter"] = {"paper_id": paper_id}
 
-                results = self._vectorstore.similarity_search_with_relevance_scores(
+                # Raw distances avoid LangChain's out-of-range relevance warning,
+                # which can include complete document contents in application logs.
+                results = self._vectorstore.similarity_search_with_score(
                     question, **search_kwargs
                 )
                 passages = [
@@ -642,9 +644,9 @@ class RAGEngine:
                         "paper": doc.metadata.get("filename", "unknown"),
                         "paper_id": doc.metadata.get("paper_id"),
                         "chunk_id": doc.metadata.get("chunk_id"),
-                        "score": score,
+                        "score": 1 / (60 + rank),
                     }
-                    for doc, score in results
+                    for rank, (doc, _) in enumerate(results, 1)
                 ]
                 # Storage and its lexical mirror are read under the same work lock.
                 # Only indexed chunks in the requested scope may participate.

@@ -42,19 +42,25 @@ def lexical_rank(question: str, chunks: list[dict]) -> list[tuple[dict, float]]:
 
 def hybrid_rank(dense: list[tuple[dict, float]], lexical: list[tuple[dict, float]],
                 top_k: int) -> list[tuple[dict, float]]:
-    """Reciprocal rank fusion. Scores express ranking, never confidence."""
-    scores, chunks = {}, {}
-    for ranked in (dense, lexical):
-        seen = set()
-        for rank, (chunk, _) in enumerate(ranked[:CANDIDATE_LIMIT], 1):
-            key = chunk["chunk_id"]
-            if key in seen:
+    """Alternate keyword and semantic hits, deduplicating without losing either list.
+
+    Rank-sum fusion can discard exact-identifier passages which appear only in
+    the lexical list. Interleaving preserves representatives of both retrieval
+    methods. Reciprocal *output rank* scores are not similarity or confidence.
+    """
+    selected, seen = [], set()
+    for index in range(min(CANDIDATE_LIMIT, max(len(dense), len(lexical)))):
+        for ranked in (lexical, dense):
+            if index >= len(ranked):
                 continue
-            seen.add(key)
-            chunks[key] = chunk
-            scores[key] = scores.get(key, 0.0) + 1 / (60 + rank)
-    keys = sorted(scores, key=lambda key: (-scores[key], key))[:top_k]
-    return [(chunks[key], scores[key]) for key in keys]
+            chunk = ranked[index][0]
+            if chunk["chunk_id"] in seen:
+                continue
+            seen.add(chunk["chunk_id"])
+            selected.append((chunk, 1 / (60 + len(selected) + 1)))
+            if len(selected) >= top_k:
+                return selected
+    return selected
 
 
 def evidence_window(chunk: dict, page_text: str, max_chars: int) -> str:

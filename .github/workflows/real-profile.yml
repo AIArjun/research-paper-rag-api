@@ -11,6 +11,8 @@ on:
       - 'requirements-real*'
       - 'requirements-test*'
       - 'scripts/measure_real_profile.py'
+      - 'scripts/evaluate_retrieval.py'
+      - 'frontend/public/samples/**'
       - 'scripts/real_entrypoint.sh'
       - '.github/workflows/real-profile.yml'
 
@@ -53,6 +55,17 @@ jobs:
             --env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1 \
             --entrypoint python rag-real-profile:test \
             -m pytest tests/ -q -p no:cacheprovider 2>&1 | tee measurement-artifacts/tests.log
+
+      - name: Check public-paper evidence coverage without provider calls
+        run: |
+          set -o pipefail
+          docker run --rm --network none --memory 2g --memory-swap 2g --cpus 1 \
+            --env LLM_PROVIDER=demo --env OPENAI_API_KEY= \
+            --env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1 \
+            --volume "$PWD/frontend/public/samples:/fixtures:ro" \
+            --entrypoint python rag-real-profile:test \
+            scripts/evaluate_retrieval.py --fixtures /fixtures \
+            | tee measurement-artifacts/retrieval-quality.json
 
       - name: Measure both isolated resource profiles
         if: ${{ !cancelled() && success() }}

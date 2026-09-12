@@ -46,7 +46,7 @@ class FakeVectorStore:
                 raise OSError("Simulated interrupted deletion")
             self.rows.pop(chunk_id, None)
 
-    def similarity_search_with_relevance_scores(self, question, k, filter=None):
+    def similarity_search_with_score(self, question, k, filter=None):
         self.search_calls += 1
         results = []
         for text, metadata in self.rows.values():

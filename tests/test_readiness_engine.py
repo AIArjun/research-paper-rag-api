@@ -39,7 +39,7 @@ def fake_modules(monkeypatch):
         def __init__(self, **kwargs):
             self.results = []
 
-        def similarity_search_with_relevance_scores(self, question, **kwargs):
+        def similarity_search_with_score(self, question, **kwargs):
             return self.results
 
     class FakeModel:
@@ -264,7 +264,7 @@ def test_falsey_initialized_backends_still_ingest_query_and_delete(
                 for text, metadata in zip(texts, metadatas)
             ]
 
-        def similarity_search_with_relevance_scores(self, question, **kwargs):
+        def similarity_search_with_score(self, question, **kwargs):
             return self.rows
 
         def delete(self, ids):
