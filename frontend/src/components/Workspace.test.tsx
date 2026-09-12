@@ -113,7 +113,7 @@ describe("Workspace never queries the model without an explicit submit", () => {
     expect(chips[0]?.getAttribute("aria-label")).toBe("Show evidence: Attention, page 4");
     fireEvent.click(chips[0]!);
     expect(screen.getByRole("heading", { name: /Page 4/ })).toBeTruthy();
-    expect(screen.getByText(/similarity 0.440/)).toBeTruthy();
+    expect(screen.getByText(/retrieval score 0.440/)).toBeTruthy();
     expect(screen.getByText("gpt-4o-mini")).toBeTruthy();
     expect(screen.getByText(/800 in · 90 out/)).toBeTruthy();
     const frame = document.querySelector("iframe");
