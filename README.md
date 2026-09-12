@@ -2,7 +2,9 @@
 
 A research **Retrieval-Augmented Generation (RAG)** API prototype. Upload research papers (PDF) and ask questions with source passages and page references. Real-model answers require a separately configured and verified backend.
 
-**Live Demo:** [https://research-paper-rag-api.onrender.com](https://research-paper-rag-api.onrender.com) | [API Docs](https://research-paper-rag-api.onrender.com/docs)
+**Open the app:** [Research Observatory](https://research-observatory-gamma.vercel.app) · [About the product / request access](https://arjunworks.se/research)
+
+The browser application runs on Vercel. The [Render service](https://research-paper-rag-api.onrender.com) is its backend; [API documentation](https://research-paper-rag-api.onrender.com/docs) is intended for developers. The live app is a passcode-protected, shared public-paper research preview. Uploads currently clear after a backend restart; the usage ledger persists. See [frontend setup and limits](frontend/README.md).
 
 Built with **LangChain + FastAPI + ChromaDB + OpenAI/Ollama + Docker**.
 

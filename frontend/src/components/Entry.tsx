@@ -80,6 +80,10 @@ export function Entry({ configured }: Props) {
         <p className="entry__footnote">
           Shared public-paper demo. Answers are a research preview: check the cited sources.
         </p>
+        <p className="entry__footnote">
+          <a href="https://arjunworks.se/research#request-access">Request access by email</a>
+          {" · "}<a href="https://arjunworks.se">Visit Arjunworks</a>
+        </p>
       </section>
     </main>
   );
