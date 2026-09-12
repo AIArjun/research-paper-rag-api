@@ -34,6 +34,7 @@ from typing import Optional
 from app.config import settings
 from app.diagnostics import log_safe_error
 from app.ledger import BudgetExhaustedError, LedgerError, ModelCallLedger
+from app.retrieval import CANDIDATE_LIMIT, evidence_window, hybrid_rank, lexical_rank
 from app.tokens import TokenBound, TokenBoundError, token_bound_for
 
 # Word boundary tolerance for pdfplumber as a fraction of the glyph size.
@@ -140,6 +141,7 @@ class RAGEngine:
     def __init__(self):
         self.papers: dict[str, dict] = {}
         self.chunks_store: list[dict] = []
+        self._page_texts: dict[str, dict[int, str]] = {}
         # Failed storage mutations remain recoverable by retrying deletion.
         # This guard is process-local; durable recovery is a separate milestone.
         self._pending_cleanup: dict[str, list[str]] = {}
@@ -541,6 +543,8 @@ class RAGEngine:
                     "chunk_id": f"{paper_id}-{index}",
                     "filename": filename,
                     "page": c["page"],
+                    "char_start": c["char_start"],
+                    "char_end": c["char_end"],
                 }
                 for index, c in enumerate(chunks)
             ]
@@ -566,18 +570,17 @@ class RAGEngine:
                     cleanup_required=False,
                 ) from error
             logger.info("Added %d chunks to the vector store for paper %s", len(chunks), paper_id[:12])
-            with self._state_lock:
-                self.papers[paper_id] = paper
         else:
-            # Demo mode: store chunks in memory
-            for i, c in enumerate(chunks):
-                c["paper_id"] = paper_id
-                c["filename"] = filename
-                c["chunk_id"] = f"{paper_id}-{i}"
-            with self._state_lock:
-                self.chunks_store.extend(chunks)
-                self.papers[paper_id] = paper
             logger.info("Demo mode: stored %d chunks in memory for paper %s", len(chunks), paper_id[:12])
+
+        # Publish the lexical corpus and original pages only after storage succeeds.
+        # The existing paper/chunk ceilings bound this process-local mirror too.
+        for i, chunk in enumerate(chunks):
+            chunk.update(paper_id=paper_id, filename=filename, chunk_id=f"{paper_id}-{i}")
+        with self._state_lock:
+            self.chunks_store.extend(chunks)
+            self._page_texts[paper_id] = {page["page"]: page["text"] for page in pages}
+            self.papers[paper_id] = paper
 
         return {
             "paper_id": paper_id,
@@ -625,7 +628,7 @@ class RAGEngine:
             self.assert_storage_ready()
             self.assert_backend_ready()
             if self._vectorstore is not None:
-                search_kwargs = {"k": top_k}
+                search_kwargs = {"k": CANDIDATE_LIMIT}
                 if paper_id:
                     search_kwargs["filter"] = {"paper_id": paper_id}
 
@@ -643,12 +646,40 @@ class RAGEngine:
                     }
                     for doc, score in results
                 ]
+                # Storage and its lexical mirror are read under the same work lock.
+                # Only indexed chunks in the requested scope may participate.
+                chunks = [chunk for chunk in self.chunks_store
+                          if not paper_id or chunk["paper_id"] == paper_id]
+                if chunks:
+                    by_id = {chunk["chunk_id"]: chunk for chunk in chunks}
+                    dense = [(by_id[doc.metadata["chunk_id"]], score)
+                             for doc, score in results if doc.metadata.get("chunk_id") in by_id]
+                    ranked = hybrid_rank(dense, lexical_rank(question, chunks), top_k)
+                    passages = []
+                    for chunk, score in ranked:
+                        header = f"[Source: {chunk['filename']}, Page {chunk['page']}]\n"
+                        allowance = max(0, limits.max_context_chars // top_k - len(header) - 2)
+                        page = self._page_texts.get(chunk["paper_id"], {}).get(chunk["page"], "")
+                        passages.append({
+                            "text": evidence_window(chunk, page, allowance),
+                            "preview": chunk["text"][:300],
+                            "page": chunk["page"], "paper": chunk["filename"],
+                            "paper_id": chunk["paper_id"], "chunk_id": chunk["chunk_id"],
+                            "score": score,
+                        })
+                else:
+                    # Preserve compatibility with injected/test stores without a mirror.
+                    passages = passages[:top_k]
             else:
                 # Demo mode: simple keyword matching
                 passages = self._demo_retrieve(question, paper_id, top_k)
 
         # Citation previews are presentation data, not the generation context.
-        citations = [{**passage, "text": passage["text"][:300]} for passage in passages]
+        citations = [
+            {**{key: value for key, value in passage.items() if key != "preview"},
+             "text": passage.get("preview", passage["text"][:300])}
+            for passage in passages
+        ]
 
         retrieval_time = (time.time() - retrieval_start) * 1000
 
@@ -888,6 +919,7 @@ class RAGEngine:
                 c for c in self.chunks_store if c.get("paper_id") != paper_id
             ]
             self.papers.pop(paper_id, None)
+            self._page_texts.pop(paper_id, None)
             self._pending_cleanup.pop(paper_id, None)
             self._pending_metadata.pop(paper_id, None)
         logger.info("Deleted paper %s", paper_id[:12] if isinstance(paper_id, str) else "unknown")

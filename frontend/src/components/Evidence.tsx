@@ -61,8 +61,8 @@ export function Evidence({ citations, papersSearched, selected, papers, localFil
                   <span className="source__body">
                     <span className="source__paper">{paperTitle(c.paper_id, c.paper)}</span>
                     <span className="source__where">
-                      {c.page !== null ? `Page ${c.page}` : "Page unknown"} · similarity {c.relevance_score.toFixed(3)}
-                      <span className="source__uncal"> (Chroma score, uncalibrated)</span>
+                      {c.page !== null ? `Page ${c.page}` : "Page unknown"} · retrieval score {c.relevance_score.toFixed(3)}
+                      <span className="source__uncal"> (uncalibrated)</span>
                     </span>
                     <span className="source__text">{c.text}</span>
                     <span className="source__status">

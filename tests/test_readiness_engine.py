@@ -279,7 +279,7 @@ def test_falsey_initialized_backends_still_ingest_query_and_delete(
     engine._llm = Model()
     monkeypatch.setattr(engine, "_extract_pdf", lambda _: [{"page": 1, "text": "Evidence"}])
     uploaded = engine.ingest_paper(b"falsey backend test", "paper.pdf")
-    assert engine._vectorstore.rows and engine.chunks_store == []
+    assert engine._vectorstore.rows and len(engine.chunks_store) == uploaded["chunks"]
     assert engine.query("Evidence")["answer"] == "An actual fake-model invocation"
     assert engine.delete_paper(uploaded["paper_id"]) is True
     assert engine._vectorstore.deleted
