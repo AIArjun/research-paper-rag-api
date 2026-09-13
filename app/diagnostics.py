@@ -8,6 +8,7 @@ _CATEGORIES = frozenset({
     "embedding_initialization_failed", "storage_initialization_failed",
     "model_initialization_failed", "generation_failed", "ingestion_failed",
     "query_failed", "budget_not_configured", "ledger_unavailable", "token_bound_unavailable",
+    "corpus_unavailable", "corpus_recovery_failed", "corpus_write_failed",
 })
 _MODULE_ROOTS = frozenset({
     "builtins", "langchain_huggingface", "langchain_chroma", "langchain_openai",

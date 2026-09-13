@@ -59,7 +59,10 @@ async def lifespan(app: FastAPI):
     logger.info("LLM Provider: %s", settings.LLM_PROVIDER)
     logger.info("Embedding Model: %s", settings.EMBEDDING_MODEL)
     logger.info("Access token configured: %s", settings.access_token_configured())
-    yield
+    try:
+        yield
+    finally:
+        await run_in_threadpool(rag.close)
     logger.info("Shutting down RAG API.")
 
 
@@ -233,6 +236,7 @@ class HealthResponse(BaseModel):
     effective_generation: str = "unavailable"
     init_error: Optional[str] = None
     pending_cleanup_ids: list[str] = Field(default_factory=list)
+    corpus_storage: str = "ephemeral"
     provider_connection_verified: bool = False
     access_configured: bool = False
     model_budget: ModelBudgetStatus = Field(default_factory=ModelBudgetStatus)
@@ -249,6 +253,7 @@ class ReadinessResponse(BaseModel):
     effective_generation: str
     init_error: Optional[str] = None
     pending_cleanup_ids: list[str] = Field(default_factory=list)
+    corpus_storage: str = "ephemeral"
     provider_connection_verified: bool = False
     access_configured: bool = False
     model_budget: ModelBudgetStatus = Field(default_factory=ModelBudgetStatus)
@@ -648,6 +653,8 @@ async def delete_paper(request: Request, paper_id: str):
         raise _busy(request_id)
     try:
         success = await admission.run(rag.delete_paper, paper_id)
+    except BackendUnavailableError as error:
+        raise _error(503, "Storage is unavailable; deletion was not confirmed.", error.category, request_id)
     except StorageMutationError as error:
         logger.error("[%s] Paper deletion requires storage recovery", request_id)
         raise _error(503, "Paper deletion did not complete. Retry deletion; the paper is not confirmed removed.",

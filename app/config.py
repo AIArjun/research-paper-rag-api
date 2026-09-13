@@ -119,6 +119,9 @@ class Settings:
 
     # Vector Store
     VECTORSTORE_PATH: str = os.getenv("VECTORSTORE_PATH", "./vectorstore")
+    # Canonical corpus; its derived index lives beside it at <path>.vectors.
+    # Empty preserves the disposable development/demo profile.
+    PAPER_STORE_PATH: str = os.getenv("PAPER_STORE_PATH", "")
 
     # Chunking
     CHUNK_SIZE: int | None = _chunk_integer_from_env("CHUNK_SIZE", 500)
@@ -229,6 +232,16 @@ class Settings:
         if not _is_positive_integer(self.LLM_MAX_OUTPUT_TOKENS, 4096):
             raise ValueError("LLM_MAX_OUTPUT_TOKENS must be an integer between 1 and 4096.")
         self.budget_allowances()
+        if not isinstance(self.PAPER_STORE_PATH, str):
+            raise ValueError("PAPER_STORE_PATH must be a string.")
+        if self.PAPER_STORE_PATH:
+            from pathlib import Path
+            corpus_path = Path(self.PAPER_STORE_PATH)
+            if not corpus_path.is_absolute() or not corpus_path.name:
+                raise ValueError("PAPER_STORE_PATH must be an absolute file path.")
+            if (self.MODEL_CALL_LEDGER_PATH and
+                    corpus_path.resolve() == Path(self.MODEL_CALL_LEDGER_PATH).resolve()):
+                raise ValueError("The paper store and model ledger must be separate files.")
         if self.LLM_PROVIDER != "demo":
             for value in (self.LLM_MODEL, self.EMBEDDING_MODEL, self.VECTORSTORE_PATH):
                 if not isinstance(value, str) or not value.strip():

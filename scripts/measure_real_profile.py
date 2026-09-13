@@ -29,6 +29,7 @@ MEASUREMENT_ENVIRONMENT = (
     # Inside a root-owned, non-writable (0755) tmpfs mount, so the measurement
     # proves the entrypoint hands the ledger directory to the runtime user.
     "MODEL_CALL_LEDGER_PATH=/var/data/ledger/model-calls.sqlite3",
+    "PAPER_STORE_PATH=/var/data/corpus/papers.sqlite3",
     "MAX_MODEL_CALLS_PER_DAY=1", "MAX_MODEL_CALLS_TOTAL=1",
     "MAX_MODEL_TOKENS_PER_DAY=2000", "MAX_MODEL_TOKENS_TOTAL=2000",
 )

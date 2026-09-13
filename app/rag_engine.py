@@ -32,6 +32,7 @@ from threading import RLock
 from typing import Optional
 
 from app.config import settings
+from app.paper_store import PaperStore
 from app.diagnostics import log_safe_error
 from app.ledger import BudgetExhaustedError, LedgerError, ModelCallLedger
 from app.retrieval import CANDIDATE_LIMIT, evidence_window, hybrid_rank, lexical_rank
@@ -143,7 +144,7 @@ class RAGEngine:
         self.chunks_store: list[dict] = []
         self._page_texts: dict[str, dict[int, str]] = {}
         # Failed storage mutations remain recoverable by retrying deletion.
-        # This guard is process-local; durable recovery is a separate milestone.
+        # With PAPER_STORE_PATH set, these guards are restored from its journal.
         self._pending_cleanup: dict[str, list[str]] = {}
         self._pending_metadata: dict[str, dict] = {}
         self._state_lock = RLock()
@@ -156,7 +157,79 @@ class RAGEngine:
         self._llm = None
         self._ledger: Optional[ModelCallLedger] = None
         self._token_bound: Optional[TokenBound] = None
+        self._paper_store: Optional[PaperStore] = None
         self._initialize()
+        if self._init_error is None and self._paper_store is not None:
+            try:
+                self._restore_corpus()
+            except Exception as error:
+                self._init_error = "corpus_recovery_failed"
+                log_safe_error(logger, self._init_error, error)
+        if self._init_error is not None and self._paper_store is not None:
+            self._paper_store.close()
+            self._paper_store = None
+
+    def close(self) -> None:
+        """Release the exclusive corpus lock after the server stops its workers."""
+        with self._work_lock:
+            if self._paper_store is not None:
+                self._paper_store.close()
+                self._paper_store = None
+            self._init_error = "engine_closed"
+
+    @staticmethod
+    def _index_data(paper: dict, chunks: list[dict]) -> tuple[list, list, list]:
+        ids = [f"{paper['paper_id']}-{index}" for index in range(len(chunks))]
+        metadata = [{"paper_id": paper["paper_id"], "chunk_id": chunk_id,
+                     "filename": paper["filename"], "page": chunk["page"],
+                     "char_start": chunk["char_start"], "char_end": chunk["char_end"]}
+                    for chunk_id, chunk in zip(ids, chunks)]
+        return [c["text"] for c in chunks], metadata, ids
+
+    def _publish_paper(self, paper: dict, pages: list[dict], chunks: list[dict]) -> None:
+        paper_id = paper["paper_id"]
+        indexed = [{**chunk, "paper_id": paper_id, "filename": paper["filename"],
+                    "chunk_id": f"{paper_id}-{i}"} for i, chunk in enumerate(chunks)]
+        with self._state_lock:
+            self.chunks_store.extend(indexed)
+            self._page_texts[paper_id] = {page["page"]: page["text"] for page in pages}
+            self.papers[paper_id] = paper
+
+    def _restore_corpus(self) -> None:
+        """Validate the derived index and rebuild missing data using local embeddings.
+
+        Unknown vectors fail closed, rather than adopting or destroying another
+        corpus. Pending mutations stay hidden and explicitly deletable.
+        """
+        records = self._paper_store.load(settings.resource_limits())
+        expected = {}
+        for record in records:
+            texts, metadata, ids = self._index_data(record["paper"], record["chunks"])
+            expected.update({cid: (text, meta, record["state"])
+                             for cid, text, meta in zip(ids, texts, metadata)})
+        if self._vectorstore is not None:
+            # Bound the read before fetching a potentially unrelated collection.
+            if self._vectorstore._collection.count() > len(expected):
+                raise ValueError("corpus_index_mismatch")
+            snapshot = self._vectorstore.get(include=["documents", "metadatas"])
+            actual = {cid: (text, meta) for cid, text, meta in zip(
+                snapshot["ids"], snapshot["documents"], snapshot["metadatas"])}
+            if set(actual) - set(expected):
+                raise ValueError("corpus_index_mismatch")
+            repairs = [(cid, text, meta) for cid, (text, meta, state) in expected.items()
+                       if state == "ready" and actual.get(cid) != (text, meta)]
+            for offset in range(0, len(repairs), 64):
+                batch = repairs[offset:offset + 64]
+                self._vectorstore.add_texts(ids=[r[0] for r in batch],
+                                           texts=[r[1] for r in batch],
+                                           metadatas=[r[2] for r in batch])
+        for record in records:
+            paper = record["paper"]
+            if record["state"] == "pending":
+                self._pending_cleanup[paper["paper_id"]] = self._index_data(paper, record["chunks"])[2]
+                self._pending_metadata[paper["paper_id"]] = paper
+            else:
+                self._publish_paper(paper, record["pages"], record["chunks"])
 
     def _initialize(self):
         """Record explicit initialization failures without activating a demo fallback."""
@@ -172,6 +245,19 @@ class RAGEngine:
             self._init_error = "invalid_configuration"
             log_safe_error(logger, self._init_error, error)
             return
+
+        if settings.PAPER_STORE_PATH:
+            try:
+                self._paper_store = PaperStore(settings.PAPER_STORE_PATH, {
+                    "schema": 1, "chunk_size": settings.CHUNK_SIZE,
+                    "chunk_overlap": settings.CHUNK_OVERLAP,
+                    "index": "keyword" if self._configured_provider == "demo" else "chroma",
+                    "embedding_model": None if self._configured_provider == "demo" else settings.EMBEDDING_MODEL,
+                })
+            except Exception as error:
+                self._init_error = "corpus_unavailable"
+                log_safe_error(logger, self._init_error, error)
+                return
 
         if self._configured_provider == "demo":
             logger.info("Running in demo mode — skipping embedding model and vector store.")
@@ -224,7 +310,8 @@ class RAGEngine:
             self._vectorstore = Chroma(
                 collection_name="research_papers",
                 embedding_function=self._embeddings,
-                persist_directory=settings.VECTORSTORE_PATH,
+                persist_directory=(str(self._paper_store.path) + ".vectors"
+                                   if self._paper_store is not None else settings.VECTORSTORE_PATH),
             )
             logger.info("Vector store initialized (ChromaDB).")
             failure_category = "model_initialization_failed"
@@ -310,6 +397,8 @@ class RAGEngine:
                 ),
                 "init_error": self._init_error,
                 "pending_cleanup_ids": list(self._pending_cleanup),
+                "corpus_storage": ("unavailable" if settings.PAPER_STORE_PATH and self._init_error
+                                   else "persistent" if self._paper_store is not None else "ephemeral"),
                 # Local client construction is not evidence of a remote call.
                 "provider_connection_verified": False,
             }
@@ -534,53 +623,43 @@ class RAGEngine:
             "uploaded_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Add to vector store
-        if self._vectorstore is not None and self._embeddings is not None:
-            texts = [c["text"] for c in chunks]
-            metadatas = [
-                {
-                    "paper_id": paper_id,
-                    "chunk_id": f"{paper_id}-{index}",
-                    "filename": filename,
-                    "page": c["page"],
-                    "char_start": c["char_start"],
-                    "char_end": c["char_end"],
-                }
-                for index, c in enumerate(chunks)
-            ]
-            ids = [f"{paper_id}-{i}" for i in range(len(chunks))]
+        texts, metadatas, ids = self._index_data(paper, chunks)
+        if self._paper_store is not None:
             try:
-                self._vectorstore.add_texts(texts=texts, metadatas=metadatas, ids=ids)
+                # Commit the original bytes, extraction and mutation intent first.
+                # A crash at any later point leaves a recoverable pending record.
+                self._paper_store.stage(pdf_bytes, paper, pages, chunks)
             except Exception as error:
-                # A backend may have written part of a batch before raising.
-                try:
+                self._init_error = "corpus_write_failed"
+                raise StorageMutationError("Paper storage failed; restart to verify recovery.",
+                                           paper_id=paper_id) from error
+        try:
+            if self._vectorstore is not None and self._embeddings is not None:
+                self._vectorstore.add_texts(texts=texts, metadatas=metadatas, ids=ids)
+            if self._paper_store is not None:
+                self._paper_store.mark(paper_id, "ready")
+        except Exception as error:
+            # A backend may have written part of a batch before raising.
+            try:
+                if self._vectorstore is not None:
                     self._vectorstore.delete(ids=ids)
-                except Exception:
-                    with self._state_lock:
-                        self._pending_cleanup[paper_id] = ids
-                        self._pending_metadata[paper_id] = paper.copy()
-                    raise StorageMutationError(
-                        f"Indexing and rollback failed for paper '{paper_id}'. "
-                        "Corpus queries are blocked until deletion is retried successfully.",
-                        paper_id=paper_id,
-                    ) from error
+                if self._paper_store is not None:
+                    self._paper_store.remove(paper_id)
+            except Exception:
+                with self._state_lock:
+                    self._pending_cleanup[paper_id] = ids
+                    self._pending_metadata[paper_id] = paper.copy()
                 raise StorageMutationError(
-                    f"Indexing failed for paper '{paper_id}'; partial vectors were removed.",
+                    f"Indexing and rollback failed for paper '{paper_id}'. "
+                    "Corpus queries are blocked until deletion is retried successfully.",
                     paper_id=paper_id,
-                    cleanup_required=False,
                 ) from error
-            logger.info("Added %d chunks to the vector store for paper %s", len(chunks), paper_id[:12])
-        else:
-            logger.info("Demo mode: stored %d chunks in memory for paper %s", len(chunks), paper_id[:12])
+            raise StorageMutationError(
+                f"Indexing failed for paper '{paper_id}'; partial vectors were removed.",
+                paper_id=paper_id, cleanup_required=False,
+            ) from error
 
-        # Publish the lexical corpus and original pages only after storage succeeds.
-        # The existing paper/chunk ceilings bound this process-local mirror too.
-        for i, chunk in enumerate(chunks):
-            chunk.update(paper_id=paper_id, filename=filename, chunk_id=f"{paper_id}-{i}")
-        with self._state_lock:
-            self.chunks_store.extend(chunks)
-            self._page_texts[paper_id] = {page["page"]: page["text"] for page in pages}
-            self.papers[paper_id] = paper
+        self._publish_paper(paper, pages, chunks)
 
         return {
             "paper_id": paper_id,
@@ -888,6 +967,9 @@ class RAGEngine:
             return self._delete_paper(paper_id)
 
     def _delete_paper(self, paper_id: str) -> bool:
+        if settings.PAPER_STORE_PATH:
+            # Never erase the recovery record when the real index is unavailable.
+            self.assert_backend_ready()
         with self._state_lock:
             if paper_id not in self.papers and paper_id not in self._pending_cleanup:
                 return False
@@ -896,6 +978,16 @@ class RAGEngine:
                 ids_to_delete = [
                     f"{paper_id}-{i}" for i in range(self.papers[paper_id]["chunks"])
                 ]
+
+        if self._paper_store is not None:
+            try:
+                self._paper_store.mark(paper_id, "pending")
+            except Exception as error:
+                self._init_error = "corpus_write_failed"
+                raise StorageMutationError("Deletion journal failed; restart to verify recovery.",
+                                           paper_id=paper_id) from error
+            with self._state_lock:
+                self._pending_cleanup[paper_id] = ids_to_delete
 
         if self._vectorstore is not None:
             # Delete from ChromaDB
@@ -909,13 +1001,20 @@ class RAGEngine:
                     "Corpus queries are blocked until deletion is retried successfully.",
                     paper_id=paper_id,
                 ) from e
-        elif paper_id in self._pending_cleanup:
+        elif paper_id in self._pending_cleanup and self._paper_store is None:
             raise StorageMutationError(
                 "The vector store is unavailable; storage cleanup cannot be confirmed.",
                 paper_id=paper_id,
             )
 
-        # Remove from memory
+        if self._paper_store is not None:
+            try:
+                self._paper_store.remove(paper_id)
+            except Exception as error:
+                raise StorageMutationError("Paper data deletion failed; retry deletion.",
+                                           paper_id=paper_id) from error
+
+        # Remove from memory only after both stores have confirmed deletion.
         with self._state_lock:
             self.chunks_store = [
                 c for c in self.chunks_store if c.get("paper_id") != paper_id

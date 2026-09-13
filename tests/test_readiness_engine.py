@@ -201,6 +201,7 @@ def test_client_construction_reports_local_readiness_not_remote_verification(
         "init_error": None,
         "pending_cleanup_ids": [],
         "provider_connection_verified": False,
+        "corpus_storage": "ephemeral",
     }
     assert engine._llm.calls == 0
     assert engine._embeddings.configuration["encode_kwargs"] == {"batch_size": 32}

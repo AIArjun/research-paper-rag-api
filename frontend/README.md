@@ -79,7 +79,7 @@ Route `maxDuration` is 120 s for uploads and 90 s for queries; upstream fetches 
 
 ## Not included
 
-No Content-Security-Policy header yet (Next.js inline scripts would need a nonce pipeline); the response headers do set `X-Frame-Options`, `nosniff` and a strict referrer policy. No per-user storage, no analytics, no persistent uploads: this is a shared public-paper demo whose corpus clears on backend restart.
+No Content-Security-Policy header yet (Next.js inline scripts would need a nonce pipeline); the response headers do set `X-Frame-Options`, `nosniff` and a strict referrer policy. No per-user storage or analytics: this is a shared public-paper demo. The backend optionally persists uploads with PAPER_STORE_PATH; see [durable corpus setup](../docs/DURABLE-CORPUS.md). An unconfigured or ephemeral deployment still loses its corpus on restart.
 
 ## Sample PDFs
 
