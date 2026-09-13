@@ -48,7 +48,7 @@ export function Library(props: Props) {
 
       {papers && papers.length === 0 && !error && (
         <p className="library__empty">
-          The corpus is empty. It clears whenever the backend restarts; add a sample or your own PDF to begin.
+          The library is empty. Add a sample or your own public PDF to begin.
         </p>
       )}
 
@@ -132,7 +132,7 @@ export function Library(props: Props) {
       )}
 
       <p className="library__foot">
-        Shared public-paper demo. Papers you add are visible to other visitors until the next backend restart.
+        Shared public-paper demo. Papers you add are visible to other visitors. Upload public documents only.
       </p>
     </div>
   );

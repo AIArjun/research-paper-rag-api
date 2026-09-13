@@ -65,7 +65,7 @@ export function UploadZone({ disabled, uploadingName, elapsedSeconds, onFile }: 
         onChange={onChange}
       />
       <p className="dropzone__title">Add a paper</p>
-      <p className="dropzone__hint">Drop a text PDF here, up to {MAX_PDF_LABEL}. It joins the shared corpus until the backend restarts.</p>
+      <p className="dropzone__hint">Drop a public text PDF here, up to {MAX_PDF_LABEL}. It joins the library shared by everyone using this demo.</p>
       <label htmlFor={inputId} className={`button button--small dropzone__browse${disabled ? " button--disabled" : ""}`}>
         Choose a PDF
       </label>
