@@ -30,6 +30,17 @@ if [ "$(id -u)" -eq 0 ]; then
             fi
         done
     fi
+    if [ -n "${PAPER_STORE_PATH:-}" ]; then
+        corpus_dir=$(dirname -- "$PAPER_STORE_PATH")
+        mkdir -p -- "$corpus_dir" "$PAPER_STORE_PATH.vectors"
+        chown -- "$RUNTIME_USER:$RUNTIME_USER" "$corpus_dir" "$PAPER_STORE_PATH.vectors"
+        for corpus_file in "$PAPER_STORE_PATH" "$PAPER_STORE_PATH.lock" \
+                           "$PAPER_STORE_PATH-journal" "$PAPER_STORE_PATH-wal" "$PAPER_STORE_PATH-shm"; do
+            if [ -f "$corpus_file" ]; then
+                chown -- "$RUNTIME_USER:$RUNTIME_USER" "$corpus_file"
+            fi
+        done
+    fi
     # setpriv keeps the environment; give the runtime user its own home so
     # libraries that touch ~/.cache never see root's directory.
     HOME=$(getent passwd "$RUNTIME_USER" | cut -d: -f6)

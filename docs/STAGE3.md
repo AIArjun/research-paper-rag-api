@@ -1,5 +1,7 @@
 # Stage 3: deploying and verifying the protected demo
 
+> Storage update: the historical ledger-only deployment instructions below are superseded by [DURABLE-CORPUS.md](DURABLE-CORPUS.md) when PAPER_STORE_PATH is configured on a persistent disk. Verify the deployed commit and a restart before claiming retention.
+
 Stage 3 is one controlled live demonstration of the protected API with two public papers on the existing Render service. It is not a frontend, not durable paper metadata and not a production deployment. Nothing here changes `main`'s behavior until the service is deliberately pointed at this branch; secrets, the deploy itself and the inspection of live evidence stay with the operator.
 
 ## Decision: the ledger lives on the disk, the corpus does not

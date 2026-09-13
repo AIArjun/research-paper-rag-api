@@ -1,5 +1,7 @@
 # Real CPU profile and bounded resource measurement
 
+> Storage update: the historical ledger-only deployment instructions below are superseded by [DURABLE-CORPUS.md](DURABLE-CORPUS.md) when PAPER_STORE_PATH is configured on a persistent disk. Verify the deployed commit and a restart before claiming retention.
+
 Stage 2b builds the actual local embedding and Chroma stack. A successful measurement does not establish real-provider generation, retrieval relevance, citation accuracy, authenticated access, durability or production readiness.
 
 ## Reproducible inputs

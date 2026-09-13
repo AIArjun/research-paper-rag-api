@@ -4,11 +4,11 @@ A research **Retrieval-Augmented Generation (RAG)** API prototype. Upload resear
 
 **Open the app:** [Research Observatory](https://research-observatory-gamma.vercel.app) · [About the product / request access](https://arjunworks.se/research)
 
-The browser application runs on Vercel. The [Render service](https://research-paper-rag-api.onrender.com) is its backend; [API documentation](https://research-paper-rag-api.onrender.com/docs) is intended for developers. The live app is a passcode-protected, shared public-paper research preview. Uploads currently clear after a backend restart; the usage ledger persists. See [frontend setup and limits](frontend/README.md).
+The browser application runs on Vercel. The [Render service](https://research-paper-rag-api.onrender.com) is its backend; [API documentation](https://research-paper-rag-api.onrender.com/docs) is intended for developers. The live app is a passcode-protected, shared public-paper research preview. Paper persistence is opt-in through PAPER_STORE_PATH; check corpus_storage on /health and the deployment restart evidence. See [durable corpus setup](docs/DURABLE-CORPUS.md). See [frontend setup and limits](frontend/README.md).
 
 Built with **LangChain + FastAPI + ChromaDB + OpenAI/Ollama + Docker**.
 
-**Deployment profiles:** `Dockerfile` installs lightweight demo dependencies. Demo mode uses keyword retrieval and template answers. `Dockerfile.real` provides a separate pinned Linux/Python 3.11 CPU profile with local embeddings and Chroma; its build, tests and resource measurements are described in [the real-profile guide](docs/REAL-PROFILE.md). Adding a provider key to the demo image does not install real-RAG libraries. Stage 2c adds shared-token access control, request and corpus bounds, admission control and a persistent model-call ledger for one protected demo; see [Stage 2c: protected demo](docs/STAGE2C.md). Durable paper metadata and verified answer quality are still unfinished. The public deployment may lag this branch; verify its deployed commit before relying on new behavior.
+**Deployment profiles:** `Dockerfile` installs lightweight demo dependencies. Demo mode uses keyword retrieval and template answers. `Dockerfile.real` provides a separate pinned Linux/Python 3.11 CPU profile with local embeddings and Chroma; its build, tests and resource measurements are described in [the real-profile guide](docs/REAL-PROFILE.md). Adding a provider key to the demo image does not install real-RAG libraries. Stage 2c adds shared-token access control, request and corpus bounds, admission control and a persistent model-call ledger for one protected demo; see [Stage 2c: protected demo](docs/STAGE2C.md). The optional [durable corpus](docs/DURABLE-CORPUS.md) saves original PDFs, extraction, metadata and mutation recovery state. [Retrieval checks](docs/RETRIEVAL_QUALITY.md) cover a small public-paper sample, not general answer accuracy. The public deployment may lag this branch; verify its deployed commit before relying on new behavior.
 
 ## Protected demo (Stage 2c)
 
@@ -45,7 +45,7 @@ curl -H "Authorization: Bearer $DEMO_ACCESS_TOKEN" http://localhost:8001/papers
 - A failed deletion is not reported as success. Retry the affected deletion to recover.
 - Generation receives complete retrieved passages; response previews remain short. Citations include stable paper/chunk IDs for newly indexed content. Retrieved passages still require manual claim-and-page verification.
 
-These protections are in-process. They do not make the in-memory registry crash-safe or fix persistent-vector/orphan recovery after restart. Use a disposable local/test corpus for failure testing. Existing persistent corpora need a deliberate reindex/migration plan because document IDs have changed.
+With PAPER_STORE_PATH configured, the registry and mutation journal survive restart; missing known vectors are rebuilt from canonical chunks. Without it, these protections remain process-local. Use a disposable local/test corpus for failure testing and follow the [migration guide](docs/DURABLE-CORPUS.md) for existing deployments.
 
 ## Readiness and failures
 
@@ -53,7 +53,7 @@ These protections are in-process. They do not make the in-memory registry crash-
 
 Invalid provider/chunk/limit configuration, missing keys or dependencies, unconfigured or unusable model-call accounting, and initialization failures are reported as unready. Real-mode queries cannot silently fall back to template answers: missing backends return 503, generation failures return a sanitized 502, and empty retrieval returns an explicit abstention marked `model_used=not-invoked`. A transient generation error does not rewrite local initialization status. Every error, including framework-raised 404/405/parse failures, carries a `category` and a `request_id` (also sent as `X-Request-ID`). Error responses and logs never include raw exceptions, prompts, passages, question text, client filenames or credentials; successful responses do return the caller's own question, short citation previews and the stored filename, which is the API's purpose.
 
-`GET /papers` includes `status=ready` or `pending_cleanup`. Metadata unavailable for an incomplete record is null; active counts exclude pending records. Retrying deletion remains possible independently of model readiness. These states remain process-local until durable recovery is implemented.
+`GET /papers` includes `status=ready` or `pending_cleanup`. Metadata unavailable for an incomplete record is null; active counts exclude pending records. Pending mutations are journaled when PAPER_STORE_PATH is set. Deletion requires usable storage so the recovery record cannot be discarded before vector removal is confirmed.
 
 ---
 
@@ -288,7 +288,7 @@ Legacy figures below were previously recorded for 5 ML/CV research papers (8–2
 - **No cross-paper answer synthesis** — When querying multiple papers, the system retrieves chunks independently but does not synthesize conflicting findings across papers.
 - **No hallucination detection** — The LLM may generate plausible but unsupported claims. A verification layer comparing generated claims against retrieved chunks would reduce hallucination.
 - **Scanned PDFs not supported** — Text extraction relies on embedded text layers. Scanned/image-only PDFs require OCR preprocessing (e.g., Tesseract) which is not yet integrated.
-- **No persistent paper metadata** — Paper metadata is stored in memory. Restarting the server loses the paper registry (ChromaDB vectors persist, but the paper list does not).
+- **Paper persistence is opt-in** — Set PAPER_STORE_PATH on a persistent local disk; otherwise the registry is disposable. One worker/instance only. Verify platform retention with a restart. Backups and per-user document isolation are separate work.
 - **Ledger durability depends on the deployment** — The model-call ledger is a SQLite file. On an ephemeral filesystem a replaced container loses it and starts counting from zero, so durable storage or a provider-enforced backstop is required before paid use.
 - **Ceilings are not a price cap** — Call and token allowances bound attempted usage; the money spent depends on the provider's price list and on measured usage, which the demo cannot verify.
 
